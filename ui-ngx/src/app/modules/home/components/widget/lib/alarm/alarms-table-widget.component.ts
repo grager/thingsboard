@@ -1,19 +1,6 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import {
   AfterViewInit,
   ChangeDetectorRef,
@@ -33,34 +20,51 @@ import { PageComponent } from '@shared/components/page.component';
 import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
 import { WidgetAction, WidgetContext } from '@home/models/widget-component.models';
-import { DataKey, WidgetActionDescriptor, WidgetConfig } from '@shared/models/widget.models';
+import { DataKey, DatasourceType, WidgetActionDescriptor, WidgetConfig } from '@shared/models/widget.models';
 import { IWidgetSubscription } from '@core/api/widget-api.models';
 import { UtilsService } from '@core/services/utils.service';
 import { TranslateService } from '@ngx-translate/core';
-import {
-  deepClone,
-  hashCode,
-  isDefined,
-  isDefinedAndNotNull,
-  isNotEmptyStr,
-  isNumber,
-  isObject,
-  isUndefined
-} from '@core/utils';
+import { deepClone, hashCode, isDefined, isDefinedAndNotNull, isNotEmptyStr, isObject, isUndefined } from '@core/utils';
 import cssjs from '@core/css/css';
-import { sortItems } from '@shared/models/page/page-link';
+import { SortColumnType, sortItems } from '@shared/models/page/page-link';
 import { Direction } from '@shared/models/page/sort-order';
 import { CollectionViewer, DataSource, SelectionModel } from '@angular/cdk/collections';
-import { BehaviorSubject, forkJoin, fromEvent, merge, Observable, of, Subject, Subscription } from 'rxjs';
+import {
+  BehaviorSubject,
+  EMPTY,
+  firstValueFrom,
+  forkJoin,
+  from,
+  fromEvent,
+  merge,
+  Observable,
+  of,
+  Subject,
+  Subscription,
+  switchMap
+} from 'rxjs';
 import { emptyPageData, PageData } from '@shared/models/page/page-data';
-import { catchError, debounceTime, distinctUntilChanged, map, take, takeUntil, tap } from 'rxjs/operators';
+import {
+  catchError,
+  concatMap,
+  debounceTime,
+  distinctUntilChanged,
+  expand,
+  map,
+  take,
+  takeUntil,
+  tap,
+  toArray
+} from 'rxjs/operators';
 import { MatPaginator } from '@angular/material/paginator';
 import { MatSort, SortDirection } from '@angular/material/sort';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import {
+  CellContentFunctionInfo,
   CellContentInfo,
   CellStyleInfo,
   checkHasActions,
+  columnExportOptions,
   constructTableCssString,
   DisplayColumn,
   EntityColumn,
@@ -77,6 +81,8 @@ import {
   getHeaderTitle,
   getRowStyleInfo,
   getTableCellButtonActions,
+  isValidPageStepCount,
+  isValidPageStepIncrement,
   noDataMessage,
   prepareTableCellButtonActions,
   RowStyleInfo,
@@ -111,16 +117,21 @@ import { MatDialog } from '@angular/material/dialog';
 import { NULL_UUID } from '@shared/models/id/has-uuid';
 import { DialogService } from '@core/services/dialog.service';
 import { AlarmService } from '@core/http/alarm.service';
+import { UserPermissionsService } from '@core/http/user-permissions.service';
+import { Operation, Resource } from '@shared/models/security.models';
 import {
   AlarmData,
   AlarmDataPageLink,
+  AlarmDataQuery,
   dataKeyToEntityKey,
   dataKeyTypeToEntityKeyType,
   entityDataPageLinkSortDirection,
+  EntityKeyType,
   KeyFilter
 } from '@app/shared/models/query/query.models';
 import { DataKeyType } from '@shared/models/telemetry/telemetry.models';
 import { entityFields } from '@shared/models/entity.models';
+import { EntityService } from '@core/http/entity.service';
 import { coerceBooleanProperty } from '@angular/cdk/coercion';
 import { hidePageSizePixelValue } from '@shared/models/constants';
 import {
@@ -132,7 +143,6 @@ import {
   AlarmCommentDialogComponent,
   AlarmCommentDialogData
 } from '@home/components/alarm/alarm-comment-dialog.component';
-import { EntityService } from '@core/http/entity.service';
 import {
   ALARM_FILTER_CONFIG_DATA,
   AlarmFilterConfigComponent,
@@ -141,6 +151,7 @@ import {
 import { getCurrentAuthUser } from '@core/auth/auth.selectors';
 import { FormBuilder } from '@angular/forms';
 import { DEFAULT_OVERLAY_POSITIONS } from '@shared/models/overlay.models';
+import { ValueFormatProcessor } from '@shared/models/widget-settings.models';
 
 interface AlarmsTableWidgetSettings extends TableWidgetSettings {
   alarmsTitle: string;
@@ -164,9 +175,10 @@ interface AlarmWidgetActionDescriptor extends TableCellButtonActionDescriptor {
 }
 
 @Component({
-  selector: 'tb-alarms-table-widget',
-  templateUrl: './alarms-table-widget.component.html',
-  styleUrls: ['./alarms-table-widget.component.scss', './../table-widget.scss']
+    selector: 'tb-alarms-table-widget',
+    templateUrl: './alarms-table-widget.component.html',
+    styleUrls: ['./alarms-table-widget.component.scss', './../table-widget.scss'],
+    standalone: false
 })
 export class AlarmsTableWidgetComponent extends PageComponent implements OnInit, OnDestroy, AfterViewInit {
 
@@ -180,12 +192,13 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
 
   textSearch = this.fb.control('', {nonNullable: true});
 
+  public readonly = !this.userPermissionsService.hasGenericPermission(Resource.ALARM, Operation.WRITE);
   public enableSelection = true;
   public displayPagination = true;
   public enableStickyHeader = true;
   public enableStickyAction = false;
   public showCellActionsMenu = true;
-  public pageSizeOptions;
+  public pageSizeOptions = [];
   public pageLink: AlarmDataPageLink;
   public sortOrderProperty: string;
   public textSearchMode = false;
@@ -213,7 +226,7 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
   private allowClear = true;
   public allowAssign = true;
 
-  private defaultPageSize = 10;
+  private defaultPageSize;
   private defaultSortOrder = '-' + alarmFields.createdTime.value;
 
   private contentsInfo: {[key: string]: CellContentInfo} = {};
@@ -221,6 +234,7 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
   private columnWidth: {[key: string]: string} = {};
   private columnDefaultVisibility: {[key: string]: boolean} = {};
   private columnSelectionAvailability: {[key: string]: boolean} = {};
+  private columnExportParameters: {[key: string]: columnExportOptions} = {};
   private columnsWithCellClick: Array<number> = [];
 
   private rowStylesInfo: Observable<RowStyleInfo>;
@@ -255,17 +269,18 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
   };
 
   constructor(protected store: Store<AppState>,
+              private userPermissionsService: UserPermissionsService,
               private elementRef: ElementRef,
               private ngZone: NgZone,
               private overlay: Overlay,
               private viewContainerRef: ViewContainerRef,
+              private entityService: EntityService,
               private utils: UtilsService,
               public translate: TranslateService,
               private domSanitizer: DomSanitizer,
               private datePipe: DatePipe,
               private dialog: MatDialog,
               private dialogService: DialogService,
-              private entityService: EntityService,
               private alarmService: AlarmService,
               private cd: ChangeDetectorRef,
               private fb: FormBuilder) {
@@ -327,11 +342,22 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
     });
 
     if (this.displayPagination) {
-      this.sort.sortChange.pipe(takeUntil(this.destroy$)).subscribe(() => this.paginator.pageIndex = 0);
+      this.sort.sortChange.subscribe(() => this.paginator.pageIndex = 0);
+
+      this.ctx.aliasController?.filtersChanged.pipe(
+        takeUntil(this.destroy$)
+      ).subscribe((filters) => {
+        let currentFilterId = this.ctx.defaultSubscription.options.alarmSource?.filterId;
+        if (currentFilterId && filters.includes(currentFilterId)) {
+          this.paginator.firstPage();
+        }
+      });
     }
-    ((this.displayPagination ? merge(this.sort.sortChange, this.paginator.page) : this.sort.sortChange) as Observable<any>).pipe(
-      takeUntil(this.destroy$)
-    ).subscribe(() => this.updateData());
+    ((this.displayPagination ? merge(this.sort.sortChange, this.paginator.page) : this.sort.sortChange) as Observable<any>)
+      .pipe(
+        tap(() => this.updateData())
+      )
+      .subscribe();
     this.updateData();
   }
 
@@ -355,6 +381,8 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
   private initializeConfig() {
     this.ctx.widgetActions = [this.searchAction, this.alarmFilterAction, this.columnDisplayAction];
 
+    this.ctx.customDataExport = this.customDataExport.bind(this);
+
     this.displayActivity = isDefined(this.settings.displayActivity) ? this.settings.displayActivity : false;
     this.displayDetails = isDefined(this.settings.displayDetails) ? this.settings.displayDetails : true;
     this.allowAcknowledgment = isDefined(this.settings.allowAcknowledgment) ? this.settings.allowAcknowledgment : true;
@@ -368,10 +396,9 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
     }
 
     this.enableSelection = isDefined(this.settings.enableSelection) ? this.settings.enableSelection : true;
-    if (!this.allowAcknowledgment && !this.allowClear) {
+    if (this.readonly || (!this.allowAcknowledgment && !this.allowClear)) {
       this.enableSelection = false;
     }
-
     this.searchAction.show = isDefined(this.settings.enableSearch) ? this.settings.enableSearch : true;
     this.displayPagination = isDefined(this.settings.displayPagination) ? this.settings.displayPagination : true;
     this.enableStickyHeader = isDefined(this.settings.enableStickyHeader) ? this.settings.enableStickyHeader : true;
@@ -392,10 +419,25 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
     this.rowStylesInfo = getRowStyleInfo(this.ctx, this.settings, 'alarm, ctx');
 
     const pageSize = this.settings.defaultPageSize;
-    if (isDefined(pageSize) && isNumber(pageSize) && pageSize > 0) {
+    let pageStepIncrement = isValidPageStepIncrement(this.settings.pageStepIncrement) ? this.settings.pageStepIncrement : null;
+    let pageStepCount = isValidPageStepCount(this.settings.pageStepCount) ? this.settings.pageStepCount : null;
+
+    if (Number.isInteger(pageSize) && pageSize > 0) {
       this.defaultPageSize = pageSize;
     }
-    this.pageSizeOptions = [this.defaultPageSize, this.defaultPageSize * 2, this.defaultPageSize * 3];
+
+    if (!this.defaultPageSize) {
+      this.defaultPageSize = pageStepIncrement ?? 10;
+    }
+
+    if (!isDefinedAndNotNull(pageStepIncrement) || !isDefinedAndNotNull(pageStepCount)) {
+      pageStepIncrement = this.defaultPageSize;
+      pageStepCount = 3;
+    }
+
+    for (let i = 1; i <= pageStepCount; i++) {
+      this.pageSizeOptions.push(pageStepIncrement * i);
+    }
     this.pageLink.pageSize = this.displayPagination ? this.defaultPageSize : 1024;
 
     const alarmFilter = this.entityService.resolveAlarmFilter(this.widgetConfig.alarmFilterConfig, false);
@@ -424,11 +466,12 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
     if (this.subscription.alarmSource) {
       this.subscription.alarmSource.dataKeys.forEach((alarmDataKey) => {
         const dataKey: EntityColumn = deepClone(alarmDataKey) as EntityColumn;
-        const keySettings: TableWidgetDataKeySettings = dataKey.settings;
+        const keySettings: TableWidgetDataKeySettings = dataKey.settings ?? {};
         dataKey.entityKey = dataKeyToEntityKey(alarmDataKey);
         dataKey.label = this.utils.customTranslation(dataKey.label, dataKey.label);
         dataKey.title = getHeaderTitle(dataKey, keySettings, this.utils);
         dataKey.def = 'def' + this.columns.length;
+        dataKey.sortable = !keySettings.disableSorting && !(dataKey.type === DataKeyType.alarm && dataKey.name.startsWith('details.'));
         if (dataKey.type === DataKeyType.alarm && !isDefined(keySettings.columnWidth)) {
           const alarmField = alarmFields[dataKey.name];
           if (alarmField && alarmField.time) {
@@ -440,15 +483,17 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
         }
         this.stylesInfo[dataKey.def] = getCellStyleInfo(this.ctx, keySettings, 'value, alarm, ctx');
         const contentFunctionInfo = getCellContentFunctionInfo(this.ctx, keySettings, 'value, alarm, ctx');
-        const contentInfo: CellContentInfo = {
+        const decimals = (dataKey.decimals || dataKey.decimals === 0) ? dataKey.decimals : this.ctx.widgetConfig.decimals;
+        const units = dataKey.units || this.ctx.widgetConfig.units;
+        const valueFormat = ValueFormatProcessor.fromSettings(this.ctx.$injector, {units, decimals, showZeroDecimals: true});
+        this.contentsInfo[dataKey.def] = {
           contentFunction: contentFunctionInfo,
-          units: dataKey.units,
-          decimals: dataKey.decimals
+          valueFormat
         };
-        this.contentsInfo[dataKey.def] = contentInfo;
         this.columnWidth[dataKey.def] = getColumnWidth(keySettings);
         this.columnDefaultVisibility[dataKey.def] = getColumnDefaultVisibility(keySettings, this.ctx);
         this.columnSelectionAvailability[dataKey.def] = getColumnSelectionAvailability(keySettings);
+        this.columnExportParameters[dataKey.def] = keySettings.columnExportOption;
         this.columns.push(dataKey);
 
         if (dataKey.type !== DataKeyType.alarm) {
@@ -534,7 +579,7 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
     if ($event) {
       $event.stopPropagation();
     }
-    const target = $event.target || $event.srcElement || $event.currentTarget;
+    const target = $event.target || $event.currentTarget;
     const config = new OverlayConfig({
       panelClass: 'tb-panel-container',
       backdropClass: 'cdk-overlay-transparent-backdrop',
@@ -605,7 +650,7 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
     if ($event) {
       $event.stopPropagation();
     }
-    const target = $event.target || $event.srcElement || $event.currentTarget;
+    const target = $event.target || $event.currentTarget;
     const config = new OverlayConfig({
       panelClass: 'tb-filter-panel',
       backdropClass: 'cdk-overlay-transparent-backdrop',
@@ -701,21 +746,17 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
       this.pageLink.sortOrder = null;
     }
     const sortOrderLabel = fromEntityColumnDef(this.sort.active, this.columns);
+    const sortColumnType: SortColumnType = key
+      ? (key.type === EntityKeyType.ENTITY_FIELD || key.type === EntityKeyType.ALARM_FIELD ? 'entityField'
+         : key.type === EntityKeyType.TIME_SERIES ? 'timeseries' : 'attribute')
+      : 'entityField';
     const keyFilters: KeyFilter[] = null; // TODO:
-    this.alarmsDatasource.loadAlarms(this.pageLink, sortOrderLabel, keyFilters);
+    this.alarmsDatasource.loadAlarms(this.pageLink, sortOrderLabel, sortColumnType, keyFilters);
     this.ctx.detectChanges();
-  }
-
-  public trackByColumnDef(index, column: EntityColumn) {
-    return column.def;
   }
 
   public trackByAlarmId(index: number, alarm: AlarmData) {
     return alarm.id.id;
-  }
-
-  public trackByActionCellDescriptionId(index: number, action: WidgetActionDescriptor) {
-    return action.id;
   }
 
   public headerStyle(key: EntityColumn): any {
@@ -725,7 +766,7 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
 
   public rowStyle(alarm: AlarmDataInfo, row: number): Observable<any> {
     let style$: Observable<any>;
-    let res = this.rowStyleCache[row];
+    const res = this.rowStyleCache[row];
     if (!res) {
       style$ = this.rowStylesInfo.pipe(
         map(styleInfo => {
@@ -763,7 +804,7 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
     let style$: Observable<any>;
     const col = this.columns.indexOf(key);
     const index = row * this.columns.length + col;
-    let res = this.cellStyleCache[index];
+    const res = this.cellStyleCache[index];
     if (!res) {
       if (alarm && key) {
         style$ = this.stylesInfo[key.def].pipe(
@@ -809,11 +850,11 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
     return style$;
   }
 
-  public cellContent(alarm: AlarmDataInfo, key: EntityColumn, row: number): Observable<SafeHtml> {
+  public cellContent(alarm: AlarmDataInfo, key: EntityColumn, row: number, useSafeHtml = true, isExport = false): Observable<SafeHtml> {
     let content$: Observable<SafeHtml>;
     const col = this.columns.indexOf(key);
     const index = row * this.columns.length + col;
-    let res = this.cellContentCache[index];
+    const res = useSafeHtml ? this.cellContentCache[index] : undefined;
     if (isUndefined(res)) {
       const contentInfo = this.contentsInfo[key.def];
       content$ = contentInfo.contentFunction.pipe(
@@ -822,20 +863,20 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
           if (alarm && key) {
             const contentInfo = this.contentsInfo[key.def];
             const value = getAlarmValue(alarm, key);
-            if (contentFunction.useCellContentFunction && contentFunction.cellContentFunction) {
-              try {
-                content = contentFunction.cellContentFunction.execute(value, alarm, this.ctx);
-              } catch (e) {
-                content = '' + value;
-              }
+            if (contentFunction.useCellContentFunction && contentFunction.cellContentFunction && !isExport) {
+              content = this.applyCellContentFunction(alarm, contentFunction, value);
             } else {
-              content = this.defaultContent(key, contentInfo, value);
+              content = contentFunction.useCellContentFunctionOnExport ? this.applyCellContentFunction(alarm, contentFunction, value)
+                : this.defaultContent(key, contentInfo, value);
             }
             if (isDefined(content)) {
+              if (typeof content === 'object') {
+                content = JSON.stringify(content);
+              }
               content = this.utils.customTranslation(content, content);
               switch (typeof content) {
                 case 'string':
-                  content = this.domSanitizer.bypassSecurityTrustHtml(content);
+                  content = useSafeHtml ? this.domSanitizer.bypassSecurityTrustHtml(content) : content;
                   break;
               }
             }
@@ -845,13 +886,25 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
       );
       content$ = content$.pipe(
         tap((content) => {
-          this.cellContentCache[index] = content;
+          if (useSafeHtml) {
+            this.cellContentCache[index] = content;
+          }
         })
       );
     } else {
       content$ = of(res);
     }
     return content$;
+  }
+
+  private applyCellContentFunction(alarm: AlarmDataInfo, contentFunction: CellContentFunctionInfo, value: any) {
+    let content: string;
+    try {
+      content = contentFunction.cellContentFunction.execute(value, alarm, this.ctx);
+    } catch (e) {
+      content = '' + value;
+    }
+    return content;
   }
 
   public onCellClick($event: Event, alarm: AlarmDataInfo, key: EntityColumn, columnIndex: number) {
@@ -927,10 +980,10 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
 
   public actionEnabled(alarm: AlarmDataInfo, actionDescriptor: AlarmWidgetActionDescriptor): boolean {
     if (actionDescriptor.acknowledge) {
-      return (alarm.status === AlarmStatus.ACTIVE_UNACK ||
+      return !this.readonly && (alarm.status === AlarmStatus.ACTIVE_UNACK ||
         alarm.status === AlarmStatus.CLEARED_UNACK);
     } else if (actionDescriptor.clear) {
-      return (alarm.status === AlarmStatus.ACTIVE_ACK ||
+      return !this.readonly && (alarm.status === AlarmStatus.ACTIVE_ACK ||
         alarm.status === AlarmStatus.ACTIVE_UNACK);
     }
     return true;
@@ -945,11 +998,12 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
       (AlarmDetailsDialogComponent,
         {
           disableClose: true,
-          panelClass: ['tb-dialog', 'tb-fullscreen-dialog'],
+          panelClass: ['tb-dialog', 'tb-fullscreen-dialog', this.ctx.stateController.dashboardCtrl.dashboardCtx.dashboardCssClass, this.ctx.widgetCssClass],
           data: {
             alarmId: alarm.id.id,
-            allowAcknowledgment: this.allowAcknowledgment,
-            allowClear: this.allowClear,
+            alarm,
+            allowAcknowledgment: !this.readonly && this.allowAcknowledgment,
+            allowClear: !this.readonly && this.allowClear,
             displayDetails: true,
             allowAssign: this.allowAssign
           }
@@ -1118,9 +1172,7 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
           return this.datePipe.transform(value, 'yyyy-MM-dd HH:mm:ss');
         }
       }
-      const decimals = (contentInfo.decimals || contentInfo.decimals === 0) ? contentInfo.decimals : this.ctx.widgetConfig.decimals;
-      const units = contentInfo.units || this.ctx.widgetConfig.units;
-      return this.ctx.utils.formatValue(value, decimals, units, true);
+      return contentInfo.valueFormat.format(value);
     } else {
       return '';
     }
@@ -1146,8 +1198,129 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
     }
   }
 
-  isSorting(column: EntityColumn): boolean {
-    return column.type === DataKeyType.alarm && column.name.startsWith('details.');
+  customDataExport(): Observable<Map<string, any>[]> {
+    if (this.subscription.alarmSource && this.subscription.alarmSource.type === DatasourceType.entity &&
+        this.subscription.alarmSource.entityFilter) {
+      const pageLink = deepClone(this.pageLink);
+      pageLink.dynamic = false;
+      pageLink.page = 0;
+      pageLink.pageSize = 1000;
+      pageLink.startTs = this.subscription.timeWindow.minTime;
+      pageLink.endTs = this.subscription.timeWindow.maxTime;
+      delete pageLink.timeWindow;
+      const query: AlarmDataQuery = {
+        entityFilter: this.subscription.alarmSource.entityFilter,
+        keyFilters: this.subscription.alarmSource.keyFilters,
+        pageLink
+      };
+      const exportedColumns = this.columns.filter(
+        c => this.includeColumnInExport(c) && c.entityKey);
+      query.entityFields = exportedColumns.filter(c => c.entityKey.type === EntityKeyType.ENTITY_FIELD &&
+        entityFields[c.entityKey.key]).map(c => c.entityKey);
+      query.latestValues = exportedColumns.filter(c => c.entityKey.type === EntityKeyType.ATTRIBUTE ||
+        c.entityKey.type === EntityKeyType.TIME_SERIES).map(c => c.entityKey);
+      query.alarmFields = exportedColumns.filter(c => c.entityKey.type === EntityKeyType.ALARM_FIELD &&
+        alarmFields[c.entityKey.key]).map(c => c.entityKey);
+
+      return this.entityService.findAlarmDataByQuery(query).pipe(
+        expand(data => {
+          if (data.hasNext) {
+            pageLink.page += 1;
+            return this.entityService.findAlarmDataByQuery(query);
+          } else {
+            return EMPTY;
+          }
+        }),
+        concatMap(data => from(data.data)),
+        toArray(),
+        map(rawData => this.sortAlarmsForExport(
+          rawData.map(a => this.alarmsDatasource.alarmDataToInfo(a)))),
+        switchMap(alarms => alarms.length
+          ? forkJoin(alarms.map((alarm, index) => from(this.alarmToExportedData(alarm, index, exportedColumns))))
+          : of([] as {[key: string]: any}[])),
+        map(rows => rows.map(rowObject => new Map(Object.entries(rowObject))))
+      );
+    } else {
+      const exportedData: Observable<Map<string, any>>[] = [];
+      const alarmsToExport = this.alarmsDatasource.alarms;
+      alarmsToExport.forEach((alarm, index) => {
+        const dataMap = new Map<string, Observable<any>>();
+        this.columns.forEach((column) => {
+          if (this.includeColumnInExport(column)) {
+            dataMap.set(column.title, this.cellContent(alarm, column, index, false, true));
+          }
+        });
+        if (dataMap.size > 0) {
+          const orderedKeys = Array.from(dataMap.keys());
+          const orderedObservables = Array.from(dataMap.values());
+
+          exportedData.push(
+            forkJoin(orderedObservables).pipe(
+              map(resolvedValues => {
+                const orderedRow = new Map<string, any>();
+                orderedKeys.forEach((key, i) => {
+                  orderedRow.set(key, resolvedValues[i]);
+                });
+                return orderedRow;
+              })
+            )
+          );
+        } else {
+          exportedData.push(of(new Map<string, any>()));
+        }
+      });
+      if (exportedData.length) {
+        return forkJoin(exportedData);
+      } else {
+        return of([]);
+      }
+    }
+  }
+
+  private includeColumnInExport(column: EntityColumn): boolean {
+    switch (this.columnExportParameters[column.def]) {
+      case columnExportOptions.always:
+        return true;
+      case columnExportOptions.never:
+        return false;
+      default:
+        return this.displayedColumns.indexOf(column.def) > -1;
+    }
+  }
+
+  private async alarmToExportedData(alarm: AlarmDataInfo,
+                                    index: number,
+                                    columns: EntityColumn[]): Promise<{[key: string]: any}> {
+    const dataObj: {[key: string]: any} = {};
+    for (const column of columns) {
+      if (column.name === alarmFields.assignee.value) {
+        let displayName = '';
+        if (alarm.assignee) {
+          displayName = this.getUserDisplayName(alarm.assignee);
+        }
+        dataObj[column.title] = displayName;
+      } else {
+        dataObj[column.title] = await firstValueFrom(this.cellContent(alarm, column, index, false, true));
+      }
+    }
+    return dataObj;
+  }
+
+  private sortAlarmsForExport(alarms: AlarmDataInfo[]): AlarmDataInfo[] {
+    if (!alarms.length || !this.pageLink.sortOrder || !this.sort?.active) {
+      return alarms;
+    }
+    const sortOrderLabel = fromEntityColumnDef(this.sort.active, this.columns);
+    if (!sortOrderLabel) {
+      return alarms;
+    }
+    const key = findEntityKeyByColumnDef(this.sort.active, this.columns);
+    const sortColumnType: SortColumnType = key
+      ? (key.type === EntityKeyType.ENTITY_FIELD || key.type === EntityKeyType.ALARM_FIELD ? 'entityField'
+         : key.type === EntityKeyType.TIME_SERIES ? 'timeseries' : 'attribute')
+      : 'entityField';
+    const asc = this.pageLink.sortOrder.direction === Direction.ASC;
+    return alarms.sort((a, b) => sortItems(a, b, sortOrderLabel, asc, sortColumnType));
   }
 
   private clearCache() {
@@ -1174,10 +1347,11 @@ export class AlarmsTableWidgetComponent extends PageComponent implements OnInit,
   }
 
   openAlarmAssigneePanel($event: Event, entity: AlarmInfo) {
-    if ($event) {
-      $event.stopPropagation();
+    $event?.stopPropagation();
+    if (entity.id.id === NULL_UUID) {
+      return
     }
-    const target = $event.target || $event.srcElement || $event.currentTarget;
+    const target = $event.target || $event.currentTarget;
     const config = new OverlayConfig();
     config.backdropClass = 'cdk-overlay-transparent-backdrop';
     config.hasBackdrop = true;
@@ -1227,11 +1401,13 @@ class AlarmsDatasource implements DataSource<AlarmDataInfo> {
 
   private currentAlarm: AlarmDataInfo = null;
 
+  public alarms: AlarmDataInfo[] = [];
   public dataLoading = true;
   public countCellButtonAction = 0;
 
   private appliedPageLink: AlarmDataPageLink;
   private appliedSortOrderLabel: string;
+  private appliedSortColumnType: SortColumnType = 'entityField';
 
   private reserveSpaceForHiddenAction = true;
   private cellButtonActions: TableCellButtonActionDescriptor[];
@@ -1270,11 +1446,13 @@ class AlarmsDatasource implements DataSource<AlarmDataInfo> {
     this.pageDataSubject.complete();
   }
 
-  loadAlarms(pageLink: AlarmDataPageLink, sortOrderLabel: string, keyFilters: KeyFilter[]) {
+  loadAlarms(pageLink: AlarmDataPageLink, sortOrderLabel: string,
+             sortColumnType: SortColumnType, keyFilters: KeyFilter[]) {
     this.dataLoading = true;
     // this.clear();
     this.appliedPageLink = pageLink;
     this.appliedSortOrderLabel = sortOrderLabel;
+    this.appliedSortColumnType = sortColumnType;
     this.subscription.subscribeForAlarms(pageLink, keyFilters);
   }
 
@@ -1283,6 +1461,7 @@ class AlarmsDatasource implements DataSource<AlarmDataInfo> {
       this.selection.clear();
       this.onSelectionModeChanged(false);
     }
+    this.alarms = [];
     this.alarmsSubject.next([]);
     this.pageDataSubject.next(emptyPageData<AlarmDataInfo>());
   }
@@ -1306,7 +1485,7 @@ class AlarmsDatasource implements DataSource<AlarmDataInfo> {
       }
       if (this.appliedSortOrderLabel && this.appliedSortOrderLabel.length) {
         const asc = this.appliedPageLink.sortOrder.direction === Direction.ASC;
-        alarms = alarms.sort((a, b) => sortItems(a, b, this.appliedSortOrderLabel, asc));
+        alarms = alarms.sort((a, b) => sortItems(a, b, this.appliedSortOrderLabel, asc, this.appliedSortColumnType));
       }
       if (this.selection.hasValue()) {
         const alarmIds = alarms.map((alarm) => alarm.id.id);
@@ -1316,6 +1495,7 @@ class AlarmsDatasource implements DataSource<AlarmDataInfo> {
           isEmptySelection = true;
         }
       }
+      this.alarms = alarms;
       const alarmsPageData: PageData<AlarmDataInfo> = {
         data: alarms,
         totalPages: subscriptionAlarms.totalPages,
@@ -1334,11 +1514,11 @@ class AlarmsDatasource implements DataSource<AlarmDataInfo> {
     });
   }
 
-  private alarmDataToInfo(alarmData: AlarmData): AlarmDataInfo {
+  public alarmDataToInfo(alarmData: AlarmData): AlarmDataInfo {
     const alarm: AlarmDataInfo = deepClone(alarmData);
     delete alarm.latest;
     const latest = alarmData.latest;
-    this.dataKeys.forEach((dataKey, index) => {
+    this.dataKeys.forEach((dataKey) => {
       const type = dataKeyTypeToEntityKeyType(dataKey.type);
       let value = '';
       if (type) {

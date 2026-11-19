@@ -1,20 +1,9 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.script.api.tbel;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.google.common.primitives.Bytes;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.ArrayUtils;
@@ -22,25 +11,33 @@ import org.mvel2.ExecutionContext;
 import org.mvel2.ParserConfiguration;
 import org.mvel2.execution.ExecutionArrayList;
 import org.mvel2.execution.ExecutionHashMap;
+import org.mvel2.execution.ExecutionLinkedHashSet;
 import org.mvel2.util.MethodStub;
+import org.thingsboard.common.util.JacksonUtil;
+import org.thingsboard.common.util.NumberUtils;
+import org.thingsboard.common.util.geo.Coordinates;
+import org.thingsboard.common.util.geo.GeoUtil;
+import org.thingsboard.common.util.geo.RangeUnit;
 import org.thingsboard.server.common.data.StringUtils;
 
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.math.RoundingMode;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -251,10 +248,14 @@ public class TbUtils {
                 byte[].class, int.class, int.class)));
         parserConfig.addImport("parseBytesLongToDouble", new MethodStub(TbUtils.class.getMethod("parseBytesLongToDouble",
                 byte[].class, int.class, int.class, boolean.class)));
-        parserConfig.addImport("toFixed", new MethodStub(TbUtils.class.getMethod("toFixed",
+        parserConfig.addImport("toFixed", new MethodStub(NumberUtils.class.getMethod("toFixed",
                 double.class, int.class)));
-        parserConfig.addImport("toFixed", new MethodStub(TbUtils.class.getMethod("toFixed",
+        parserConfig.addImport("toFixed", new MethodStub(NumberUtils.class.getMethod("toFixed",
                 float.class, int.class)));
+        parserConfig.addImport("toInt", new MethodStub(NumberUtils.class.getMethod("toInt",
+                double.class)));
+        parserConfig.addImport("isNaN", new MethodStub(NumberUtils.class.getMethod("isNaN",
+                double.class)));
         parserConfig.addImport("hexToBytes", new MethodStub(TbUtils.class.getMethod("hexToBytes",
                 ExecutionContext.class, String.class)));
         parserConfig.addImport("hexToBytesArray", new MethodStub(TbUtils.class.getMethod("hexToBytesArray",
@@ -367,6 +368,24 @@ public class TbUtils {
                 byte[].class, int.class)));
         parserConfig.addImport("parseBinaryArrayToInt", new MethodStub(TbUtils.class.getMethod("parseBinaryArrayToInt",
                 byte[].class, int.class, int.class)));
+        parserConfig.addImport("isInsidePolygon", new MethodStub(TbUtils.class.getMethod("isInsidePolygon",
+                double.class, double.class, String.class)));
+        parserConfig.addImport("isInsideCircle", new MethodStub(TbUtils.class.getMethod("isInsideCircle",
+                double.class, double.class, String.class)));
+        parserConfig.addImport("parseDateToTimestampOrNow", new MethodStub(TbUtils.class.getMethod("parseDateToTimestampOrNow",
+                String.class)));
+        parserConfig.addImport("isMap", new MethodStub(TbUtils.class.getMethod("isMap",
+                Object.class)));
+        parserConfig.addImport("isList", new MethodStub(TbUtils.class.getMethod("isList",
+                Object.class)));
+        parserConfig.addImport("isArray", new MethodStub(TbUtils.class.getMethod("isArray",
+                Object.class)));
+        parserConfig.addImport("newSet", new MethodStub(TbUtils.class.getMethod("newSet",
+                ExecutionContext.class)));
+        parserConfig.addImport("toSet", new MethodStub(TbUtils.class.getMethod("toSet",
+                ExecutionContext.class, List.class)));
+        parserConfig.addImport("isSet", new MethodStub(TbUtils.class.getMethod("isSet",
+                Object.class)));
     }
 
     public static String btoa(String input) {
@@ -767,6 +786,15 @@ public class TbUtils {
         }
     }
 
+    public static long parseDateToTimestampOrNow(String dateString) {
+        try {
+            Instant instant = Instant.parse(dateString);
+            return instant.toEpochMilli();
+        } catch (DateTimeParseException e) {
+            return System.currentTimeMillis();
+        }
+    }
+
     private static String prepareNumberHexString(Long number, boolean bigEndian, boolean pref, int len, int hexLenMax) {
         String hex = Long.toHexString(number).toUpperCase();
         hexLenMax = hexLenMax < 0 ? hex.length() : hexLenMax;
@@ -871,11 +899,11 @@ public class TbUtils {
 
     public static int parseBytesToInt(byte[] data, int offset, int length, boolean bigEndian) {
         validationNumberByLength(data, offset, length, BYTES_LEN_INT_MAX);
-        var bb = ByteBuffer.allocate(4);
+        var bb = ByteBuffer.allocate(BYTES_LEN_INT_MAX);
         if (!bigEndian) {
             bb.order(ByteOrder.LITTLE_ENDIAN);
         }
-        bb.position(bigEndian ? 4 - length : 0);
+        bb.position(bigEndian ? BYTES_LEN_INT_MAX - length : 0);
         bb.put(data, offset, length);
         bb.position(0);
         return bb.getInt();
@@ -896,11 +924,11 @@ public class TbUtils {
     public static long parseBytesToUnsignedInt(byte[] data, int offset, int length, boolean bigEndian) {
         validationNumberByLength(data, offset, length, BYTES_LEN_INT_MAX);
 
-        ByteBuffer bb = ByteBuffer.allocate(8);
+        ByteBuffer bb = ByteBuffer.allocate(BYTES_LEN_LONG_MAX);
         if (!bigEndian) {
             bb.order(ByteOrder.LITTLE_ENDIAN);
         }
-        bb.position(bigEndian ? 8 - length : 0);
+        bb.position(bigEndian ? BYTES_LEN_LONG_MAX - length : 0);
         bb.put(data, offset, length);
         bb.position(0);
 
@@ -1147,14 +1175,6 @@ public class TbUtils {
         return new String(hexChars, StandardCharsets.UTF_8);
     }
 
-    public static double toFixed(double value, int precision) {
-        return BigDecimal.valueOf(value).setScale(precision, RoundingMode.HALF_UP).doubleValue();
-    }
-
-    public static float toFixed(float value, int precision) {
-        return BigDecimal.valueOf(value).setScale(precision, RoundingMode.HALF_UP).floatValue();
-    }
-
     public static ExecutionHashMap<String, Object> toFlatMap(ExecutionContext ctx, Map<String, Object> json) {
         return toFlatMap(ctx, json, new ArrayList<>(), true);
     }
@@ -1172,7 +1192,6 @@ public class TbUtils {
         parseRecursive(json, map, excludeList, "", pathInKey);
         return map;
     }
-
 
     public static String encodeURI(String uri) {
         String encoded = URLEncoder.encode(uri, StandardCharsets.UTF_8);
@@ -1299,7 +1318,7 @@ public class TbUtils {
         if (str == null || str.isEmpty()) {
             return -1;
         }
-        return str.matches("[+-]?\\d+(\\.\\d+)?") ? DEC_RADIX : -1;
+        return str.matches("[+-]?\\d+(\\.\\d+)?([eE][+-]?\\d+)?") ? DEC_RADIX : -1;
     }
 
     public static int isHexadecimal(String str) {
@@ -1314,7 +1333,7 @@ public class TbUtils {
         for (byte b : byteArray) {
             byteList.add(b);
         }
-        ExecutionArrayList<Byte> list = new ExecutionArrayList(byteList, ctx);
+        ExecutionArrayList<Byte> list = new ExecutionArrayList<>(byteList, ctx);
         return list;
     }
 
@@ -1425,6 +1444,48 @@ public class TbUtils {
         return result;
     }
 
+    public static boolean isInsidePolygon(double latitude, double longitude, String perimeter) {
+        return GeoUtil.contains(perimeter, new Coordinates(latitude, longitude));
+    }
+
+    public static boolean isInsideCircle(double latitude, double longitude, String perimeter) {
+        JsonNode perimeterJson = JacksonUtil.toJsonNode(perimeter);
+        double centerLatitude = Double.parseDouble(perimeterJson.get("latitude").asText());
+        double centerLongitude = Double.parseDouble(perimeterJson.get("longitude").asText());
+        double range = Double.parseDouble(perimeterJson.get("radius").asText());
+        RangeUnit rangeUnit = perimeterJson.has("radiusUnit") ? RangeUnit.valueOf(perimeterJson.get("radiusUnit").asText()) : RangeUnit.METER;
+
+        Coordinates entityCoordinates = new Coordinates(latitude, longitude);
+        Coordinates perimeterCoordinates = new Coordinates(centerLatitude, centerLongitude);
+        return range > GeoUtil.distance(entityCoordinates, perimeterCoordinates, rangeUnit);
+    }
+
+    public static boolean isMap(Object obj) {
+        return obj instanceof Map;
+
+    }
+
+    public static boolean isList(Object obj) {
+        return obj instanceof List;
+    }
+
+    public static boolean isArray(Object obj) {
+        return obj != null && obj.getClass().isArray();
+    }
+
+    public static <E> Set<E> newSet(ExecutionContext ctx) {
+        return new ExecutionLinkedHashSet<>(ctx);
+    }
+
+    public static <E> Set<E> toSet(ExecutionContext ctx, List<E> list) {
+        Set<E> newSet = new LinkedHashSet<>(list);
+        return new ExecutionLinkedHashSet<>(newSet, ctx);
+    }
+
+    public static boolean isSet(Object obj) {
+        return obj instanceof Set;
+    }
+
     private static byte isValidIntegerToByte(Integer val) {
         if (val > 255 || val < -128) {
             throw new NumberFormatException("The value '" + val + "' could not be correctly converted to a byte. " +
@@ -1506,5 +1567,6 @@ public class TbUtils {
         }
         return hex;
     }
+
 }
 

@@ -1,20 +1,7 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
-import { Inject, Injectable, NgZone, Renderer2 } from '@angular/core';
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
+import { Inject, Injectable, NgZone, Renderer2, DOCUMENT } from '@angular/core';
 import { WINDOW } from '@core/services/window.service';
 import { ExceptionData, parseException } from '@app/shared/models/error.models';
 import {
@@ -45,13 +32,13 @@ import { publishReplay, refCount } from 'rxjs/operators';
 import { WidgetContext } from '@app/modules/home/models/widget-component.models';
 import { AttributeData, LatestTelemetry, TelemetryType } from '@shared/models/telemetry/telemetry.models';
 import { EntityId } from '@shared/models/id/entity-id';
-import { DatePipe, DOCUMENT } from '@angular/common';
+import { DatePipe } from '@angular/common';
 import { entityTypeTranslations } from '@shared/models/entity-type.models';
 import cssjs from '@core/css/css';
 import { isNotEmptyTbFunction } from '@shared/models/js-function.models';
 import { defaultFormProperties, FormProperty } from '@shared/models/dynamic-form.models';
 
-const i18nRegExp = new RegExp(`{${i18nPrefix}:[^{}]+}`, 'g');
+const i18nRegExp = new RegExp(`{${i18nPrefix}:([^{}]+)}`, 'g');
 
 const predefinedFunctions: { [func: string]: string } = {
   Sin: 'return Math.round(1000*Math.sin(time/5000));',
@@ -90,6 +77,8 @@ export class UtilsService {
   widgetEditMode = false;
   editWidgetInfo: WidgetInfo = null;
 
+  stateSelectView = false;
+
   defaultDataKey: DataKey = {
     name: 'f(x)',
     type: DataKeyType.function,
@@ -97,7 +86,6 @@ export class UtilsService {
     color: this.getMaterialColor(0),
     funcBody: this.getPredefinedFunctionBody('Sin'),
     settings: {},
-    _hash: Math.random()
   };
 
   defaultDatasource: Datasource = {
@@ -126,6 +114,10 @@ export class UtilsService {
         this.editWidgetInfo = JSON.parse(dataWidgetAttr);
         this.widgetEditMode = true;
       }
+      const stateSelectViewAttr = frame.getAttribute('state-select-view');
+      if (stateSelectViewAttr) {
+        this.stateSelectView = true;
+      }
     }
   }
 
@@ -153,8 +145,7 @@ export class UtilsService {
         type: DataKeyType.alarm,
         label: this.translate.instant(alarmFields[name].name),
         color: this.getMaterialColor(i),
-        settings: {},
-        _hash: Math.random()
+        settings: {}
       };
       this.defaultAlarmDataKeys.push(dataKey);
     }
@@ -208,22 +199,21 @@ export class UtilsService {
     return parseException(exception, lineOffset);
   }
 
-  public customTranslation(translationValue: string, defaultValue: string): string {
-    if (translationValue && isString(translationValue)) {
-      if (translationValue.includes(`{${i18nPrefix}`)) {
-        const matches = translationValue.match(i18nRegExp);
-        let result = translationValue;
-        for (const match of matches) {
-          const translationId = match.substring(6, match.length - 1);
-          result = result.replace(match, this.doTranslate(translationId, match));
-        }
-        return result;
-      } else {
-        return this.doTranslate(translationValue, defaultValue, customTranslationsPrefix);
-      }
-    } else {
+  public customTranslation(translationValue: string, defaultValue: string = translationValue): string {
+    if (!translationValue || !isString(translationValue)) {
       return translationValue;
     }
+    if (!translationValue.includes(`{${i18nPrefix}:`)) {
+      return this.doTranslate(translationValue, defaultValue, customTranslationsPrefix);
+    }
+    const matches = translationValue.matchAll(i18nRegExp);
+    let result = translationValue;
+    for (const [fullMatch, translationId] of matches) {
+      if (translationId) {
+        result = result.replace(fullMatch, this.doTranslate(translationId, fullMatch));
+      }
+    }
+    return result;
   }
 
   private doTranslate(translationValue: string, defaultValue: string, prefix?: string): string {
@@ -268,8 +258,7 @@ export class UtilsService {
       type,
       label,
       funcBody: keyInfo.funcBody,
-      settings: {},
-      _hash: Math.random()
+      settings: {}
     };
     if (keyInfo.units) {
       dataKey.units = keyInfo.units;
@@ -305,7 +294,6 @@ export class UtilsService {
         .reduce((previousValue, currentValue) => previousValue + currentValue, 0);
       additionalDataKey.color = this.getMaterialColor(index + additionalKeysNumber);
     }
-    additionalDataKey._hash = Math.random();
     return additionalDataKey;
   }*/
 
@@ -419,6 +407,14 @@ export class UtilsService {
     }
   }
 
+  public translateText(text: string): string {
+    if (text.startsWith('${') && text.endsWith('}')) {
+      return this.translate.instant(text.substring(2, text.length - 1));
+    } else {
+      return text;
+    }
+  }
+
   private getEntityIdFromDatasource(dataSource: Datasource): EntityId {
     return {id: dataSource.entityId, entityType: dataSource.entityType};
   }
@@ -458,11 +454,11 @@ export class UtilsService {
     return base64toObj(b64Encoded);
   }
 
-  public applyCssToElement(renderer: Renderer2, element: any, cssClassPrefix: string, css: string): string {
+  public applyCssToElement(renderer: Renderer2, element: any, cssClassPrefix: string, css: string, addTbDefaultClass: boolean = false): string {
     const cssParser = new cssjs();
     cssParser.testMode = false;
     const cssClass = `${cssClassPrefix}-${guid()}`;
-    cssParser.cssPreviewNamespace = cssClass;
+    cssParser.cssPreviewNamespace = addTbDefaultClass ? 'tb-default .' + cssClass : cssClass;
     cssParser.createStyleElement(cssClass, css);
     renderer.addClass(element, cssClass);
     return cssClass;
@@ -477,5 +473,4 @@ export class UtilsService {
       el.parentNode.removeChild(el);
     }
   }
-
 }

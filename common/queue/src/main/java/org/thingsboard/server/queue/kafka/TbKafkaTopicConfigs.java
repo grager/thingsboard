@@ -1,31 +1,19 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.queue.kafka;
 
 import jakarta.annotation.PostConstruct;
 import lombok.Getter;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.thingsboard.server.queue.util.PropertyUtils;
+import org.thingsboard.server.queue.util.TbKafkaComponent;
 
 import java.util.Map;
 
 @Component
-@ConditionalOnProperty(prefix = "queue", value = "type", havingValue = "kafka")
+@TbKafkaComponent
 public class TbKafkaTopicConfigs {
 
     public static final String NUM_PARTITIONS_SETTING = "partitions";
@@ -36,6 +24,8 @@ public class TbKafkaTopicConfigs {
     private String ruleEngineProperties;
     @Value("${queue.kafka.topic-properties.transport-api:}")
     private String transportApiProperties;
+    @Value("${queue.kafka.topic-properties.integration-api:}")
+    private String integrationApiProperties;
     @Value("${queue.kafka.topic-properties.notifications:}")
     private String notificationsProperties;
     @Value("${queue.kafka.topic-properties.js-executor:}")
@@ -52,6 +42,20 @@ public class TbKafkaTopicConfigs {
     private String housekeeperProperties;
     @Value("${queue.kafka.topic-properties.housekeeper-reprocessing:}")
     private String housekeeperReprocessingProperties;
+    @Value("${queue.kafka.topic-properties.calculated-field:}")
+    private String calculatedFieldProperties;
+    @Value("${queue.kafka.topic-properties.calculated-field-state:}")
+    private String calculatedFieldStateProperties;
+    @Value("${queue.kafka.topic-properties.edqs-events:}")
+    private String edqsEventsProperties;
+    @Value("${queue.kafka.topic-properties.edqs-requests:}")
+    private String edqsRequestsProperties;
+    @Value("${queue.kafka.topic-properties.edqs-state:}")
+    private String edqsStateProperties;
+    @Value("${queue.kafka.topic-properties.tasks:}")
+    private String tasksProperties;
+    @Value("${queue.kafka.topic-properties.agent-bulk-ops:}")
+    private String agentBulkOpsProperties;
 
     @Getter
     private Map<String, String> coreConfigs;
@@ -61,6 +65,10 @@ public class TbKafkaTopicConfigs {
     private Map<String, String> transportApiRequestConfigs;
     @Getter
     private Map<String, String> transportApiResponseConfigs;
+    @Getter
+    private Map<String, String> integrationApiRequestConfigs;
+    @Getter
+    private Map<String, String> integrationApiResponseConfigs;
     @Getter
     private Map<String, String> notificationsConfigs;
     @Getter
@@ -79,6 +87,20 @@ public class TbKafkaTopicConfigs {
     private Map<String, String> edgeConfigs;
     @Getter
     private Map<String, String> edgeEventConfigs;
+    @Getter
+    private Map<String, String> calculatedFieldConfigs;
+    @Getter
+    private Map<String, String>  calculatedFieldStateConfigs;
+    @Getter
+    private Map<String, String> edqsEventsConfigs;
+    @Getter
+    private Map<String, String> edqsRequestsConfigs;
+    @Getter
+    private Map<String, String> edqsStateConfigs;
+    @Getter
+    private Map<String, String> tasksConfigs;
+    @Getter
+    private Map<String, String> agentBulkOpsConfigs;
 
     @PostConstruct
     private void init() {
@@ -87,6 +109,9 @@ public class TbKafkaTopicConfigs {
         transportApiRequestConfigs = PropertyUtils.getProps(transportApiProperties);
         transportApiResponseConfigs = PropertyUtils.getProps(transportApiProperties);
         transportApiResponseConfigs.put(NUM_PARTITIONS_SETTING, "1");
+        integrationApiRequestConfigs = PropertyUtils.getProps(integrationApiProperties);
+        integrationApiResponseConfigs = PropertyUtils.getProps(integrationApiProperties);
+        integrationApiResponseConfigs.put(NUM_PARTITIONS_SETTING, "1");
         notificationsConfigs = PropertyUtils.getProps(notificationsProperties);
         jsExecutorRequestConfigs = PropertyUtils.getProps(jsExecutorProperties);
         jsExecutorResponseConfigs = PropertyUtils.getProps(jsExecutorProperties);
@@ -97,6 +122,13 @@ public class TbKafkaTopicConfigs {
         housekeeperReprocessingConfigs = PropertyUtils.getProps(housekeeperReprocessingProperties);
         edgeConfigs = PropertyUtils.getProps(edgeProperties);
         edgeEventConfigs = PropertyUtils.getProps(edgeEventProperties);
+        calculatedFieldConfigs = PropertyUtils.getProps(calculatedFieldProperties);
+        calculatedFieldStateConfigs = PropertyUtils.getProps(calculatedFieldStateProperties);
+        edqsEventsConfigs = PropertyUtils.getProps(edqsEventsProperties);
+        edqsRequestsConfigs = PropertyUtils.getProps(edqsRequestsProperties);
+        edqsStateConfigs = PropertyUtils.getProps(edqsStateProperties);
+        tasksConfigs = PropertyUtils.getProps(tasksProperties);
+        agentBulkOpsConfigs = PropertyUtils.getProps(agentBulkOpsProperties);
     }
 
 }

@@ -1,19 +1,6 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import { AfterViewInit, Component, ElementRef, Input, OnDestroy, ViewChild } from '@angular/core';
 import { PageComponent } from '@shared/components/page.component';
 import { WidgetContext } from '@home/models/widget-component.models';
@@ -24,7 +11,6 @@ import { isDefined } from '@core/utils';
 import { IWidgetSubscription, SubscriptionInfo, WidgetSubscriptionOptions } from '@core/api/widget-api.models';
 import { DatasourceType, widgetType } from '@shared/models/widget.models';
 import { EntityType } from '@shared/models/entity-type.models';
-import { MatSlideToggle } from '@angular/material/slide-toggle';
 import { ThemePalette } from '@angular/material/core';
 
 const switchAspectRation = 2.7893;
@@ -51,9 +37,10 @@ interface SwitchSettings {
 }
 
 @Component({
-  selector: 'tb-switch',
-  templateUrl: './switch.component.html',
-  styleUrls: ['./switch.component.scss']
+    selector: 'tb-switch',
+    templateUrl: './switch.component.html',
+    styleUrls: ['./switch.component.scss'],
+    standalone: false
 })
 export class SwitchComponent extends PageComponent implements AfterViewInit, OnDestroy {
 
@@ -254,7 +241,7 @@ export class SwitchComponent extends PageComponent implements AfterViewInit, OnD
 
   private setFontSize(element: JQuery<HTMLElement>, text: string, fontSize: number, maxWidth: number) {
     let textWidth = this.measureTextWidth(text, fontSize);
-    while (textWidth > maxWidth) {
+    while (textWidth > maxWidth && fontSize > 1) {
       fontSize--;
       textWidth = this.measureTextWidth(text, fontSize);
     }
@@ -268,7 +255,7 @@ export class SwitchComponent extends PageComponent implements AfterViewInit, OnD
   }
 
   private onError(error: string) {
-    this.error = error;
+    this.error = error ? error.replace(/<\/?br\s*\/?>/gi, '. ') : error;
     if (this.switchType === 'switch') {
       this.setFontSize(this.switchError, this.error, this.switchErrorContainer.height(), this.switchErrorContainer.width());
     }
@@ -293,10 +280,6 @@ export class SwitchComponent extends PageComponent implements AfterViewInit, OnD
       },
       () => {
         const errorText = this.ctx.defaultSubscription.rpcErrorText;
-        if (this.switchType === 'slide-toggle') {
-          this.ctx.defaultSubscription.rpcErrorText = null;
-          this.ctx.hideToast(this.ctx.toastTargetId);
-        }
         this.onError(errorText);
       }
     );
@@ -323,10 +306,6 @@ export class SwitchComponent extends PageComponent implements AfterViewInit, OnD
       () => {
         this.executingUpdateValue = false;
         const errorText = this.ctx.defaultSubscription.rpcErrorText;
-        if (this.switchType === 'slide-toggle') {
-          this.ctx.defaultSubscription.rpcErrorText = null;
-          this.ctx.hideToast(this.ctx.toastTargetId);
-        }
         this.onError(errorText);
       }
     );
@@ -373,11 +352,16 @@ export class SwitchComponent extends PageComponent implements AfterViewInit, OnD
       if (keyData && keyData.data && keyData.data[0]) {
         const attrValue = keyData.data[0][1];
         if (isDefined(attrValue)) {
-          let parsed = null;
+          let valueToParse = attrValue;
           try {
-            parsed = this.parseValueFunction(JSON.parse(attrValue));
-          } catch (e){/**/}
-          value = !!parsed;
+            valueToParse = JSON.parse(attrValue);
+          } catch (e) {/**/}
+
+          try {
+            value = !!this.parseValueFunction(valueToParse);
+          } catch (e) {
+            value = false;
+          }
         }
       }
     }

@@ -1,28 +1,18 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import { Ace } from 'ace-builds';
+import type { LanguageProvider } from 'ace-linters';
 import { Observable } from 'rxjs/internal/Observable';
 import { forkJoin, from, of } from 'rxjs';
 import { map, mergeMap, tap } from 'rxjs/operators';
 import { unwrapModule } from '@core/utils';
+import { Renderer2 } from '@angular/core';
 
 let aceDependenciesLoaded = false;
 let aceModule: any;
 let aceDiffModule: any;
+let cssLanguageProvider: LanguageProvider;
 
 function loadAceDependencies(): Observable<any> {
   if (aceDependenciesLoaded) {
@@ -42,6 +32,7 @@ function loadAceDependencies(): Observable<any> {
     aceObservables.push(from(import('ace-builds/src-noconflict/mode-svg')));
     aceObservables.push(from(import('ace-builds/src-noconflict/mode-c_cpp')));
     aceObservables.push(from(import('ace-builds/src-noconflict/mode-protobuf')));
+    aceObservables.push(from(import('ace-builds/src-noconflict/mode-yaml')));
     aceObservables.push(from(import('ace-builds/src-noconflict/snippets/java')));
     aceObservables.push(from(import('ace-builds/src-noconflict/snippets/css')));
     aceObservables.push(from(import('ace-builds/src-noconflict/snippets/json')));
@@ -95,6 +86,78 @@ export function getAceDiff(): Observable<any> {
         aceDiffModule = module;
       })
     );
+  }
+}
+
+export function getCssLanguageProvider(): Observable<LanguageProvider> {
+  if (cssLanguageProvider) {
+    return of(cssLanguageProvider);
+  } else {
+    return from(import('ace-linters')).pipe(
+      map((module) => {
+        if (!cssLanguageProvider) {
+          const aceLinters: typeof module = unwrapModule(module);
+          const worker = new Worker(new URL('../../../core/worker/css-linter.worker', import.meta.url), { type: 'module' });
+          cssLanguageProvider = aceLinters.LanguageProvider.create(worker, {
+            functionality: {
+              completion: {
+                overwriteCompleters: false
+              }
+            }
+          });
+        }
+        return cssLanguageProvider;
+      })
+    );
+  }
+}
+
+export function updateEditorSize(editorElement: any, content: string, editor: Ace.Editor, renderer: Renderer2, options?: {
+  showGutter?: boolean,
+  ignoreHeight?: boolean,
+  ignoreWidth?: boolean,
+  setMinHeight?: boolean
+}): void {
+  let newHeight = 200;
+  let newWidth = 600;
+  if (content && content.length > 0) {
+    if (editor.renderer.lineHeight <= 0) {
+      editor.renderer.updateFull(true);
+    }
+    const lines = content.split('\n');
+    newHeight = editor.renderer.lineHeight * lines.length + 16;
+    let maxLineLength = 0;
+    lines.forEach((row) => {
+      const line = row.replace(/\t/g, '  ').replace(/\n/g, '');
+      const lineLength = line.length;
+      maxLineLength = Math.max(maxLineLength, lineLength);
+    });
+    if (options?.showGutter) {
+      maxLineLength += lines.length.toString().length;
+    }
+    newWidth = 10 * maxLineLength + 16;
+    if (options?.showGutter) {
+      newWidth += 32;
+    }
+  }
+  const setHeight = (height: number) => {
+    if (!options.ignoreHeight) {
+      renderer.setStyle(editorElement, 'height', height.toString() + 'px');
+    }
+    if (options.setMinHeight) {
+      renderer.setStyle(editorElement, 'minHeight', height.toString() + 'px');
+    }
+  };
+  setHeight(newHeight);
+  if (!options.ignoreWidth) {
+    renderer.setStyle(editorElement, 'width', newWidth.toString() + 'px');
+  }
+  editor.resize(true);
+  // Ace's horizontal scrollbar overlaps the last row; grow the editor by its height so no vertical scrollbar appears
+  const scrollBarHeight: number = editor.renderer.scrollBarH.getHeight();
+  if (scrollBarHeight) {
+    setHeight(newHeight + scrollBarHeight);
+    editor.resize();
   }
 }
 
@@ -365,5 +428,15 @@ export interface AceHighlightRule {
   next?: string;
 }
 
+export const dotOperatorHighlightRule: AceHighlightRule = {
+  token: 'punctuation.operator',
+  regex: /[.](?![.])/,
+};
+
+export const endGroupHighlightRule: AceHighlightRule = {
+  regex: '',
+  token: 'empty',
+  next: 'no_regex'
+};
 
 

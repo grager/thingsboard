@@ -1,18 +1,6 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.actors.rule;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -33,15 +21,22 @@ import org.thingsboard.server.actors.ruleChain.RuleChainOutputMsg;
 import org.thingsboard.server.actors.ruleChain.RuleNodeCtx;
 import org.thingsboard.server.actors.ruleChain.RuleNodeToRuleChainTellNextMsg;
 import org.thingsboard.server.cluster.TbClusterService;
+import org.thingsboard.server.common.adaptor.JsonConverter;
 import org.thingsboard.server.common.data.DataConstants;
 import org.thingsboard.server.common.data.debug.DebugSettings;
 import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.RuleChainId;
 import org.thingsboard.server.common.data.id.RuleNodeId;
 import org.thingsboard.server.common.data.id.TenantId;
+import org.thingsboard.server.common.data.kv.AttributeKvEntry;
+import org.thingsboard.server.common.data.kv.BaseAttributeKvEntry;
+import org.thingsboard.server.common.data.kv.DataType;
+import org.thingsboard.server.common.data.kv.LongDataEntry;
+import org.thingsboard.server.common.data.kv.StringDataEntry;
 import org.thingsboard.server.common.data.msg.TbMsgType;
 import org.thingsboard.server.common.data.msg.TbNodeConnectionType;
 import org.thingsboard.server.common.data.rule.RuleNode;
+import org.thingsboard.server.common.msg.TbActorMsg;
 import org.thingsboard.server.common.msg.TbMsg;
 import org.thingsboard.server.common.msg.TbMsgMetaData;
 import org.thingsboard.server.common.msg.TbMsgProcessingStackItem;
@@ -53,10 +48,12 @@ import org.thingsboard.server.queue.common.SimpleTbQueueCallback;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -96,6 +93,174 @@ class DefaultTbContextTest {
     @BeforeEach
     public void setUp() {
         defaultTbContext = new DefaultTbContext(mainCtxMock, "Test rule chain name", nodeCtxMock);
+    }
+
+    @MethodSource
+    @ParameterizedTest
+    public void givenMsgWithQueueName_whenInput_thenVerifyEnqueueWithCorrectTpi(String queueName) {
+        // GIVEN
+        var tpi = resolve(queueName);
+
+        given(mainCtxMock.resolve(eq(ServiceType.TB_RULE_ENGINE), eq(queueName), eq(TENANT_ID), eq(TENANT_ID))).willReturn(tpi);
+        var clusterService = mock(TbClusterService.class);
+        given(mainCtxMock.getClusterService()).willReturn(clusterService);
+        var callbackMock = mock(TbMsgCallback.class);
+        given(callbackMock.isMsgValid()).willReturn(true);
+        var ruleNode = new RuleNode(RULE_NODE_ID);
+
+        var msg = TbMsg.newMsg()
+                .type(TbMsgType.POST_TELEMETRY_REQUEST)
+                .originator(TENANT_ID)
+                .queueName(queueName)
+                .copyMetaData(TbMsgMetaData.EMPTY)
+                .data(TbMsg.EMPTY_STRING)
+                .callback(callbackMock)
+                .build();
+
+        var ruleChainId = new RuleChainId(UUID.randomUUID());
+
+        ruleNode.setRuleChainId(RULE_CHAIN_ID);
+        ruleNode.setDebugSettings(DebugSettings.failures());
+        given(nodeCtxMock.getTenantId()).willReturn(TENANT_ID);
+        given(nodeCtxMock.getSelf()).willReturn(ruleNode);
+
+        // WHEN
+        defaultTbContext.input(msg, ruleChainId);
+
+        // THEN
+        then(clusterService).should().pushMsgToRuleEngine(eq(tpi), eq(msg.getId()), any(), any());
+    }
+
+    @Test
+    public void givenMsgWithCurrentNodeAlreadyInStack_whenInput_thenTellFailureToPreventLoop() {
+        // GIVEN - simulate the second iteration: current node is already in the return stack,
+        // which happens when forwardMsgToDefaultRuleChain=true and the device's default rule chain
+        // is the same as the rule chain containing this node
+        var callbackMock = mock(TbMsgCallback.class);
+        given(callbackMock.isMsgValid()).willReturn(true);
+
+        var ruleNode = new RuleNode(RULE_NODE_ID);
+        ruleNode.setRuleChainId(RULE_CHAIN_ID);
+        ruleNode.setDebugSettings(DebugSettings.off());
+        given(nodeCtxMock.getSelf()).willReturn(ruleNode);
+        given(nodeCtxMock.getTenantId()).willReturn(TENANT_ID);
+        given(nodeCtxMock.getChainActor()).willReturn(chainActorMock);
+
+        var msg = TbMsg.newMsg()
+                .type(TbMsgType.POST_TELEMETRY_REQUEST)
+                .originator(TENANT_ID)
+                .copyMetaData(TbMsgMetaData.EMPTY)
+                .data(TbMsg.EMPTY_STRING)
+                .callback(callbackMock)
+                .build();
+        // Push current node into the stack - simulates a previous iteration that already forwarded to this rule chain
+        msg.pushToStack(RULE_CHAIN_ID, RULE_NODE_ID);
+
+        var targetRuleChainId = new RuleChainId(UUID.randomUUID());
+
+        // WHEN
+        defaultTbContext.input(msg, targetRuleChainId);
+
+        // THEN - loop detected: tellFailure is called and no message is enqueued
+        ArgumentCaptor<TbActorMsg> tellCaptor = ArgumentCaptor.forClass(TbActorMsg.class);
+        then(chainActorMock).should().tell(tellCaptor.capture());
+        TbActorMsg capturedTellMsg = tellCaptor.getValue();
+        assertThat(capturedTellMsg).isInstanceOf(RuleNodeToRuleChainTellNextMsg.class);
+        RuleNodeToRuleChainTellNextMsg failureMsg = (RuleNodeToRuleChainTellNextMsg) capturedTellMsg;
+        assertThat(failureMsg.getRelationTypes()).containsOnly(TbNodeConnectionType.FAILURE);
+        assertThat(failureMsg.getFailureMessage()).containsIgnoringCase("loop");
+
+        then(mainCtxMock).shouldHaveNoInteractions(); // no message was enqueued
+    }
+
+    @MethodSource
+    @ParameterizedTest
+    public void givenMsgWithQueueName_whenEnqueue_thenVerifyEnqueueWithCorrectTpi(String queueName) {
+        // GIVEN
+        var tpi = resolve(queueName);
+
+        given(mainCtxMock.resolve(eq(ServiceType.TB_RULE_ENGINE), eq(queueName), eq(TENANT_ID), eq(TENANT_ID))).willReturn(tpi);
+        var clusterService = mock(TbClusterService.class);
+        given(mainCtxMock.getClusterService()).willReturn(clusterService);
+        var callbackMock = mock(TbMsgCallback.class);
+        given(callbackMock.isMsgValid()).willReturn(true);
+        var ruleNode = new RuleNode(RULE_NODE_ID);
+
+        var msg = TbMsg.newMsg()
+                .type(TbMsgType.POST_TELEMETRY_REQUEST)
+                .originator(TENANT_ID)
+                .queueName(queueName)
+                .copyMetaData(TbMsgMetaData.EMPTY)
+                .data(TbMsg.EMPTY_STRING)
+                .callback(callbackMock)
+                .build();
+
+        ruleNode.setRuleChainId(RULE_CHAIN_ID);
+        ruleNode.setDebugSettings(DebugSettings.failures());
+        given(nodeCtxMock.getTenantId()).willReturn(TENANT_ID);
+
+        // WHEN
+        defaultTbContext.enqueue(msg, () -> {}, t -> {});
+
+        // THEN
+        then(clusterService).should().pushMsgToRuleEngine(eq(tpi), eq(msg.getId()), any(), any());
+    }
+
+    @MethodSource
+    @ParameterizedTest
+    public void givenMsgAndQueueName_whenEnqueue_thenVerifyEnqueueWithCorrectTpi(String queueName) {
+        // GIVEN
+        var tpi = resolve(queueName);
+
+        given(mainCtxMock.resolve(eq(ServiceType.TB_RULE_ENGINE), eq(queueName), eq(TENANT_ID), eq(TENANT_ID))).willReturn(tpi);
+        var clusterService = mock(TbClusterService.class);
+        given(mainCtxMock.getClusterService()).willReturn(clusterService);
+        var callbackMock = mock(TbMsgCallback.class);
+        given(callbackMock.isMsgValid()).willReturn(true);
+        var ruleNode = new RuleNode(RULE_NODE_ID);
+
+        var msg = TbMsg.newMsg()
+                .type(TbMsgType.POST_TELEMETRY_REQUEST)
+                .originator(TENANT_ID)
+                .copyMetaData(TbMsgMetaData.EMPTY)
+                .data(TbMsg.EMPTY_STRING)
+                .callback(callbackMock)
+                .build();
+
+        ruleNode.setRuleChainId(RULE_CHAIN_ID);
+        ruleNode.setDebugSettings(DebugSettings.failures());
+        given(nodeCtxMock.getTenantId()).willReturn(TENANT_ID);
+
+        // WHEN
+        defaultTbContext.enqueue(msg, queueName, () -> {}, t -> {});
+
+        // THEN
+        then(clusterService).should().pushMsgToRuleEngine(eq(tpi), eq(msg.getId()), any(), any());
+    }
+
+    private static Stream<String> givenMsgWithQueueName_whenInput_thenVerifyEnqueueWithCorrectTpi() {
+        return testQueueNames();
+    }
+
+    private static Stream<String> givenMsgWithQueueName_whenEnqueue_thenVerifyEnqueueWithCorrectTpi() {
+        return testQueueNames();
+    }
+
+    private static Stream<String> givenMsgAndQueueName_whenEnqueue_thenVerifyEnqueueWithCorrectTpi() {
+        return testQueueNames();
+    }
+
+    private static Stream<String> testQueueNames() {
+        return Stream.of("Main", "Test", null);
+    }
+
+    private TopicPartitionInfo resolve(String queueName) {
+        var tpiBuilder = TopicPartitionInfo.builder()
+                .topic(queueName == null ? "MainQueueTopic" : queueName + "QueueTopic")
+                .partition(1)
+                .myPartition(true);
+
+        return tpiBuilder.build();
     }
 
     @Test
@@ -644,11 +809,11 @@ class DefaultTbContextTest {
 
         ToRuleEngineMsg actualToRuleEngineMsg = toRuleEngineMsgCaptor.getValue();
         assertThat(actualToRuleEngineMsg).usingRecursiveComparison()
-                .ignoringFields("tbMsg_")
+                .ignoringFields("tbMsgProto_")
                 .isEqualTo(ToRuleEngineMsg.newBuilder()
                         .setTenantIdMSB(TENANT_ID.getId().getMostSignificantBits())
                         .setTenantIdLSB(TENANT_ID.getId().getLeastSignificantBits())
-                        .setTbMsg(TbMsg.toByteString(expectedTbMsg))
+                        .setTbMsgProto(TbMsg.toProto(expectedTbMsg))
                         .addAllRelationTypes(List.of(connectionType)).build());
 
         var simpleTbQueueCallback = simpleTbQueueCallbackCaptor.getValue();
@@ -701,11 +866,11 @@ class DefaultTbContextTest {
 
         ToRuleEngineMsg actualToRuleEngineMsg = toRuleEngineMsgCaptor.getValue();
         assertThat(actualToRuleEngineMsg).usingRecursiveComparison()
-                .ignoringFields("tbMsg_")
+                .ignoringFields("tbMsgProto_")
                 .isEqualTo(ToRuleEngineMsg.newBuilder()
                         .setTenantIdMSB(TENANT_ID.getId().getMostSignificantBits())
                         .setTenantIdLSB(TENANT_ID.getId().getLeastSignificantBits())
-                        .setTbMsg(TbMsg.toByteString(expectedTbMsg))
+                        .setTbMsgProto(TbMsg.toProto(expectedTbMsg))
                         .build());
 
         var simpleTbQueueCallback = simpleTbQueueCallbackCaptor.getValue();
@@ -810,10 +975,10 @@ class DefaultTbContextTest {
     @MethodSource
     @ParameterizedTest
     void givenDebugFailuresAndDebugAllAndConnectionAndPersistedResultOptions_whenTellNext_thenVerifyDebugOutputPersistence(boolean debugFailures,
-                                                                                                                long debugAllUntil,
-                                                                                                                String connection,
-                                                                                                                boolean shouldPersist,
-                                                                                                                boolean shouldPersistAfterDurationTime) {
+                                                                                                                           long debugAllUntil,
+                                                                                                                           String connection,
+                                                                                                                           boolean shouldPersist,
+                                                                                                                           boolean shouldPersistAfterDurationTime) {
         // GIVEN
         var callbackMock = mock(TbMsgCallback.class);
         var msg = getTbMsgWithCallback(callbackMock);
@@ -883,11 +1048,11 @@ class DefaultTbContextTest {
 
         ToRuleEngineMsg actualToRuleEngineMsg = toRuleEngineMsgCaptor.getValue();
         assertThat(actualToRuleEngineMsg).usingRecursiveComparison()
-                .ignoringFields("tbMsg_")
+                .ignoringFields("tbMsgProto_.id_")
                 .isEqualTo(ToRuleEngineMsg.newBuilder()
                         .setTenantIdMSB(TENANT_ID.getId().getMostSignificantBits())
                         .setTenantIdLSB(TENANT_ID.getId().getLeastSignificantBits())
-                        .setTbMsg(TbMsg.toByteString(expectedTbMsg))
+                        .setTbMsgProto(TbMsg.toProto(expectedTbMsg))
                         .setFailureMessage(EXCEPTION_MSG)
                         .addAllRelationTypes(List.of(TbNodeConnectionType.FAILURE)).build());
 
@@ -935,6 +1100,35 @@ class DefaultTbContextTest {
                 .data(TbMsg.EMPTY_STRING)
                 .callback(callback)
                 .build();
+    }
+
+    @Test
+    public void givenSavedStringAttributes_whenAttributesUpdatedActionMsg_thenNumericStringsStayStringsWhenParsed() {
+        List<AttributeKvEntry> attributes = List.of(
+                new BaseAttributeKvEntry(new StringDataEntry("joinEui", "0000000000000000"), 0L),
+                new BaseAttributeKvEntry(new StringDataEntry("devEui", "70B3D57ED0012345"), 0L),
+                new BaseAttributeKvEntry(new LongDataEntry("fCnt", 42L), 0L));
+
+        TbMsg msg = defaultTbContext.attributesUpdatedActionMsg(TENANT_ID, RULE_NODE_ID, DataConstants.CLIENT_SCOPE, attributes);
+
+        assertThat(msg.getType()).isEqualTo(TbMsgType.ATTRIBUTES_UPDATED.name());
+        assertThat(msg.getMetaData().getValue(DataConstants.SCOPE)).isEqualTo(DataConstants.CLIENT_SCOPE);
+        assertThat(msg.getMetaData().getValue(TbMsgMetaData.TYPE_CAST_DISABLED_KEYS)).isEqualTo("[\"joinEui\"]");
+        Map<String, AttributeKvEntry> parsed = JsonConverter.attributesFromMsg(msg).stream()
+                .collect(Collectors.toMap(AttributeKvEntry::getKey, Function.identity()));
+        assertThat(parsed.get("joinEui").getDataType()).isEqualTo(DataType.STRING);
+        assertThat(parsed.get("joinEui").getValue()).isEqualTo("0000000000000000");
+        assertThat(parsed.get("devEui").getDataType()).isEqualTo(DataType.STRING);
+        assertThat(parsed.get("fCnt").getDataType()).isEqualTo(DataType.LONG);
+    }
+
+    @Test
+    public void givenNoNumericStringAttributes_whenAttributesUpdatedActionMsg_thenNoTypeCastDisabledKeys() {
+        List<AttributeKvEntry> attributes = List.of(new BaseAttributeKvEntry(new LongDataEntry("fCnt", 42L), 0L));
+
+        TbMsg msg = defaultTbContext.attributesUpdatedActionMsg(TENANT_ID, RULE_NODE_ID, DataConstants.CLIENT_SCOPE, attributes);
+
+        assertThat(msg.getMetaData().getValue(TbMsgMetaData.TYPE_CAST_DISABLED_KEYS)).isNull();
     }
 
     private TbMsg getTbMsgWithQueueName() {

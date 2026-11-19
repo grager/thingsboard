@@ -1,18 +1,6 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.controller;
 
 import io.swagger.v3.oas.annotations.Parameter;
@@ -39,6 +27,9 @@ import org.thingsboard.server.common.data.exception.ThingsboardErrorCode;
 import org.thingsboard.server.common.data.exception.ThingsboardException;
 import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.data.limit.LimitedApi;
+import org.thingsboard.server.common.data.permission.Operation;
+import org.thingsboard.server.common.data.permission.Resource;
+import org.thingsboard.server.common.data.security.Authority;
 import org.thingsboard.server.common.data.security.UserCredentials;
 import org.thingsboard.server.common.data.security.event.UserCredentialsInvalidationEvent;
 import org.thingsboard.server.common.data.security.event.UserSessionInvalidationEvent;
@@ -46,9 +37,12 @@ import org.thingsboard.server.common.data.security.model.JwtPair;
 import org.thingsboard.server.common.data.security.model.SecuritySettings;
 import org.thingsboard.server.common.data.security.model.UserPasswordPolicy;
 import org.thingsboard.server.config.annotations.ApiOperation;
+import org.thingsboard.server.dao.exception.IncorrectParameterException;
 import org.thingsboard.server.dao.settings.SecuritySettingsService;
 import org.thingsboard.server.queue.util.TbCoreComponent;
+import org.thingsboard.server.service.security.auth.mfa.TwoFactorAuthService;
 import org.thingsboard.server.service.security.auth.rest.RestAuthenticationDetails;
+import org.thingsboard.server.service.security.auth.rest.RestAwareAuthenticationSuccessHandler;
 import org.thingsboard.server.service.security.model.ActivateUserRequest;
 import org.thingsboard.server.service.security.model.ChangePasswordRequest;
 import org.thingsboard.server.service.security.model.ResetPasswordEmailRequest;
@@ -74,7 +68,8 @@ public class AuthController extends BaseController {
     private final SecuritySettingsService securitySettingsService;
     private final RateLimitService rateLimitService;
     private final ApplicationEventPublisher eventPublisher;
-
+    private final TwoFactorAuthService twoFactorAuthService;
+    private final RestAwareAuthenticationSuccessHandler authenticationSuccessHandler;
 
     @ApiOperation(value = "Get current User (getUser)",
             notes = "Get the information about the User which credentials are used to perform this REST API call.")
@@ -101,6 +96,7 @@ public class AuthController extends BaseController {
     @PostMapping(value = "/auth/changePassword")
     public JwtPair changePassword(@Parameter(description = "Change Password Request")
                                   @RequestBody ChangePasswordRequest changePasswordRequest) throws ThingsboardException {
+        accessControlService.checkPermission(getCurrentUser(), Resource.PROFILE, Operation.WRITE);
         String currentPassword = changePasswordRequest.getCurrentPassword();
         String newPassword = changePasswordRequest.getNewPassword();
         SecurityUser securityUser = getCurrentUser();
@@ -132,7 +128,7 @@ public class AuthController extends BaseController {
                     "If token is valid, returns '303 See Other' (redirect) response code with the correct address of 'Create Password' page and same 'activateToken' specified in the URL parameters. " +
                     "If token is not valid, returns '409 Conflict'. " +
                     "If token is expired, redirects to error page.")
-    @GetMapping(value = "/noauth/activate", params = {"activateToken"})
+    @GetMapping(value = "/noauth/activate")
     public ResponseEntity<?> checkActivateToken(
             @Parameter(description = "The activate token string.")
             @RequestParam(value = "activateToken") String activateToken) {
@@ -155,13 +151,20 @@ public class AuthController extends BaseController {
             HttpServletRequest request) throws ThingsboardException {
         try {
             String email = resetPasswordByEmailRequest.getEmail();
-            UserCredentials userCredentials = userService.requestPasswordReset(TenantId.SYS_TENANT_ID, email);
-            User user = userService.findUserById(TenantId.SYS_TENANT_ID, userCredentials.getUserId());
-            String baseUrl = systemSecurityService.getBaseUrl(user.getTenantId(), user.getCustomerId(), request);
+            User user = userService.findUserByEmail(TenantId.SYS_TENANT_ID, email);
+            if (user == null) {
+                throw new IncorrectParameterException(String.format("Unable to find user by email [%s]", email));
+            }
+            UserCredentials userCredentials = userService.findUserCredentialsByUserId(TenantId.SYS_TENANT_ID, user.getId());
+            UserPrincipal principal = new UserPrincipal(UserPrincipal.Type.USER_NAME, user.getEmail());
+            SecurityUser securityUser = new SecurityUser(user, userCredentials.isEnabled(), principal, getMergedUserPermissions(user, false));
+            accessControlService.checkPermission(securityUser, Resource.PROFILE, Operation.WRITE);
+
+            userCredentials = userService.requestPasswordReset(TenantId.SYS_TENANT_ID, email);
+            String baseUrl = systemSecurityService.getBaseUrl(user.getAuthority(), user.getTenantId(), user.getCustomerId(), request);
             String resetUrl = String.format("%s/api/noauth/resetPassword?resetToken=%s", baseUrl,
                     userCredentials.getResetToken());
-
-            mailService.sendResetPasswordEmailAsync(resetUrl, userCredentials.getResetTokenTtl(), email);
+            mailService.sendResetPasswordEmailAsync(user.getTenantId(), resetUrl, userCredentials.getResetTokenTtl(), email);
         } catch (Exception e) {
             log.warn("Error occurred: {}", e.getMessage());
         }
@@ -172,7 +175,7 @@ public class AuthController extends BaseController {
                     "If token is valid, returns '303 See Other' (redirect) response code with the correct address of 'Reset Password' page and same 'resetToken' specified in the URL parameters. " +
                     "If token is not valid, returns '409 Conflict'. " +
                     "If token is expired, redirects to error page.")
-    @GetMapping(value = "/noauth/resetPassword", params = {"resetToken"})
+    @GetMapping(value = "/noauth/resetPassword")
     public ResponseEntity<?> checkResetToken(
             @Parameter(description = "The reset token string.")
             @RequestParam(value = "resetToken") String resetToken) {
@@ -207,31 +210,36 @@ public class AuthController extends BaseController {
         UserCredentials credentials = userService.activateUserCredentials(TenantId.SYS_TENANT_ID, activateToken, encodedPassword);
         User user = userService.findUserById(TenantId.SYS_TENANT_ID, credentials.getUserId());
         UserPrincipal principal = new UserPrincipal(UserPrincipal.Type.USER_NAME, user.getEmail());
-        SecurityUser securityUser = new SecurityUser(user, credentials.isEnabled(), principal);
+        SecurityUser securityUser = new SecurityUser(user, credentials.isEnabled(), principal, getMergedUserPermissions(user, false));
         userService.setUserCredentialsEnabled(user.getTenantId(), user.getId(), true);
-        String baseUrl = systemSecurityService.getBaseUrl(user.getTenantId(), user.getCustomerId(), request);
+        String baseUrl = systemSecurityService.getBaseUrl(user.getAuthority(), user.getTenantId(), user.getCustomerId(), request);
         String loginUrl = String.format("%s/login", baseUrl);
         String email = user.getEmail();
 
         if (sendActivationMail) {
             try {
-                mailService.sendAccountActivatedEmail(loginUrl, email);
+                mailService.sendAccountActivatedEmail(user.getTenantId(), loginUrl, email);
             } catch (Exception e) {
                 log.warn("Unable to send account activation email [{}]", e.getMessage());
             }
         }
 
-        var tokenPair = tokenFactory.createTokenPair(securityUser);
+        JwtPair tokenPair;
+        if (twoFactorAuthService.isEnforceTwoFaEnabled(securityUser.getTenantId(), user)) {
+            tokenPair = authenticationSuccessHandler.createMfaTokenPair(securityUser, Authority.MFA_CONFIGURATION_TOKEN);
+        } else {
+            tokenPair = tokenFactory.createTokenPair(securityUser);
+        }
+
         systemSecurityService.logLoginAction(user, new RestAuthenticationDetails(request), ActionType.LOGIN, null);
         return tokenPair;
     }
 
     @ApiOperation(value = "Reset password (resetPassword)",
             notes = "Checks the password reset token and updates the password. " +
-                    "If token is valid, returns the object that contains [JWT](https://jwt.io/) access and refresh tokens. " +
                     "If token is not valid, returns '400 Bad Request'.")
     @PostMapping(value = "/noauth/resetPassword")
-    public JwtPair resetPassword(@Parameter(description = "Reset password request.")
+    public void resetPassword(@Parameter(description = "Reset password request.")
                                  @RequestBody ResetPasswordRequest resetPasswordRequest,
                                  HttpServletRequest request) throws ThingsboardException {
         String resetToken = resetPasswordRequest.getResetToken();
@@ -252,19 +260,17 @@ public class AuthController extends BaseController {
             userCredentials = userService.replaceUserCredentials(TenantId.SYS_TENANT_ID, userCredentials);
             User user = userService.findUserById(TenantId.SYS_TENANT_ID, userCredentials.getUserId());
             UserPrincipal principal = new UserPrincipal(UserPrincipal.Type.USER_NAME, user.getEmail());
-            SecurityUser securityUser = new SecurityUser(user, userCredentials.isEnabled(), principal);
-            String baseUrl = systemSecurityService.getBaseUrl(user.getTenantId(), user.getCustomerId(), request);
+            SecurityUser securityUser = new SecurityUser(user, userCredentials.isEnabled(), principal, getMergedUserPermissions(user, false));
+            String baseUrl = systemSecurityService.getBaseUrl(user.getAuthority(), user.getTenantId(), user.getCustomerId(), request);
             String loginUrl = String.format("%s/login", baseUrl);
             String email = user.getEmail();
             try {
-                mailService.sendPasswordWasResetEmail(loginUrl, email);
+                mailService.sendPasswordWasResetEmail(user.getTenantId(), loginUrl, email);
             } catch (Exception e) {
                 log.warn("Couldn't send password was reset email: {}", e.getMessage());
             }
 
             eventPublisher.publishEvent(new UserCredentialsInvalidationEvent(securityUser.getId()));
-
-            return tokenFactory.createTokenPair(securityUser);
         } else {
             throw new ThingsboardException("Invalid reset token!", ThingsboardErrorCode.BAD_REQUEST_PARAMS);
         }

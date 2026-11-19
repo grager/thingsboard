@@ -1,19 +1,6 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import {
   AttributeData,
   AttributeScope,
@@ -24,7 +11,9 @@ import {
 import { WidgetContext } from '@home/models/widget-component.models';
 import {
   BehaviorSubject,
+  defer,
   forkJoin,
+  merge,
   Observable,
   Observer,
   of,
@@ -33,14 +22,17 @@ import {
   switchMap,
   throwError
 } from 'rxjs';
-import { catchError, delay, map, share, take } from 'rxjs/operators';
+import { catchError, debounceTime, delay, map, share, take } from 'rxjs/operators';
 import { AfterViewInit, ChangeDetectorRef, Directive, Input, OnDestroy, OnInit, TemplateRef } from '@angular/core';
 import {
   DataToValueSettings,
   DataToValueType,
   GetAttributeValueSettings,
   GetValueAction,
+  GetValueRpcSettings,
   GetValueSettings,
+  RpcParamsSettings,
+  RpcParamsType,
   RpcSettings,
   SetAttributeValueSettings,
   SetValueAction,
@@ -53,10 +45,11 @@ import {
 import { ValueType } from '@shared/models/constants';
 import { EntityType, entityTypeTranslations } from '@shared/models/entity-type.models';
 import { EntityId } from '@shared/models/id/entity-id';
-import { isDefinedAndNotNull } from '@core/utils';
+import { deepClone, isDefined, isDefinedAndNotNull } from '@core/utils';
 import { parseError } from '@shared/models/error.models';
 import { CompiledTbFunction, compileTbFunction } from '@shared/models/js-function.models';
 import { HttpClient } from '@angular/common/http';
+import { StateObject } from '@core/api/widget-api.models';
 
 @Directive()
 // eslint-disable-next-line @angular-eslint/directive-class-suffix
@@ -269,6 +262,8 @@ export abstract class ValueGetter<V> extends ValueAction {
         return new AlarmStatusValueGetter<V>(ctx, settings, valueType, valueObserver, simulated);
       case GetValueAction.GET_DASHBOARD_STATE:
         return new DashboardStateGetter<V>(ctx, settings, valueType, valueObserver, simulated);
+      case GetValueAction.GET_DASHBOARD_STATE_OBJECT:
+        return new DashboardStateWithParamsGetter<V>(ctx, settings, valueType, valueObserver, simulated);
     }
   }
 
@@ -436,9 +431,51 @@ export class DefaultValueGetter<V> extends ValueGetter<V> {
   }
 }
 
+type RpcParamsFunction = () => any;
+
+export class RpcParamsConverter {
+
+  private readonly paramsFunction$: Observable<CompiledTbFunction<RpcParamsFunction>>;
+
+  constructor(private http: HttpClient,
+              private settings: RpcParamsSettings) {
+    if (settings?.type === RpcParamsType.FUNCTION) {
+      this.paramsFunction$ = defer(() => compileTbFunction<RpcParamsFunction>(this.http, settings.paramsFunction)).pipe(
+        catchError(() => {
+          return of(new CompiledTbFunction(() => null, []));
+        }),
+        share({
+          connector: () => new ReplaySubject(1),
+          resetOnError: false,
+          resetOnComplete: false,
+          resetOnRefCountZero: false
+        })
+      );
+    }
+  }
+
+  params(): Observable<any> {
+    switch (this.settings?.type) {
+      case RpcParamsType.CONSTANT:
+        return of(isDefined(this.settings.constantValue) ? this.settings.constantValue : null);
+      case RpcParamsType.FUNCTION:
+        return this.paramsFunction$.pipe(
+          map((paramsFunction) => {
+            const params = paramsFunction.execute();
+            return isDefined(params) ? params : null;
+          }),
+          catchError(() => of(null))
+        );
+      default:
+        return of(null);
+    }
+  }
+}
+
 export class ExecuteRpcValueGetter<V> extends ValueGetter<V> {
 
-  private readonly executeRpcSettings: RpcSettings;
+  private readonly executeRpcSettings: GetValueRpcSettings;
+  private readonly rpcParamsConverter: RpcParamsConverter;
 
   constructor(protected ctx: WidgetContext,
               protected settings: GetValueSettings<V>,
@@ -447,6 +484,7 @@ export class ExecuteRpcValueGetter<V> extends ValueGetter<V> {
               protected simulated: boolean) {
     super(ctx, settings, valueType, valueObserver, simulated);
     this.executeRpcSettings = settings.executeRpc;
+    this.rpcParamsConverter = new RpcParamsConverter(ctx.http, this.executeRpcSettings.params);
   }
 
   protected doGetValue(): Observable<V> {
@@ -454,12 +492,19 @@ export class ExecuteRpcValueGetter<V> extends ValueGetter<V> {
       const defaultValue = isDefinedAndNotNull(this.settings.defaultValue) ? this.settings.defaultValue : null;
       return of(defaultValue).pipe(delay(500));
     } else {
-      return this.ctx.controlApi.sendTwoWayCommand(this.executeRpcSettings.method, null,
-        this.executeRpcSettings.requestTimeout,
-        this.executeRpcSettings.requestPersistent,
-        this.executeRpcSettings.persistentPollingInterval).pipe(
+      return this.rpcParamsConverter.params().pipe(
+        switchMap(params => this.ctx.controlApi.sendTwoWayCommand(this.executeRpcSettings.method, params,
+          this.executeRpcSettings.requestTimeout,
+          this.executeRpcSettings.requestPersistent,
+          this.executeRpcSettings.persistentPollingInterval)),
         catchError((err) => {
           throw handleRpcError(this.ctx, err);
+        }),
+        share({
+          connector: () => new ReplaySubject(1),
+          resetOnError: false,
+          resetOnComplete: false,
+          resetOnRefCountZero: true
         })
       );
     }
@@ -637,6 +682,33 @@ export class DashboardStateGetter<V> extends ValueGetter<V> {
       return of('default');
     } else {
       return this.ctx.stateController.dashboardCtrl.dashboardCtx.stateId;
+    }
+  }
+}
+
+export class DashboardStateWithParamsGetter<V> extends ValueGetter<V> {
+  constructor(protected ctx: WidgetContext,
+              protected settings: GetValueSettings<V>,
+              protected valueType: ValueType,
+              protected valueObserver: Partial<Observer<V>>,
+              protected simulated: boolean) {
+    super(ctx, settings, valueType, valueObserver, simulated);
+  }
+
+  protected doGetValue(): Observable<StateObject> {
+    if (this.simulated) {
+      return of({id: 'default', params: {}});
+    } else {
+      return merge(
+        this.ctx.stateController.dashboardCtrl.dashboardCtx.stateId,
+        this.ctx.stateController.dashboardCtrl.dashboardCtx.stateChanged
+      ).pipe(
+        debounceTime(10),
+        map(() => ({
+          id: this.ctx.stateController.getStateId(),
+          params: deepClone(this.ctx.stateController.getStateParams())
+        }))
+      );
     }
   }
 }

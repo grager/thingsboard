@@ -1,19 +1,6 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import { NgModule } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { SharedModule } from '@shared/shared.module';
@@ -210,52 +197,52 @@ import {
 } from '@home/components/widget/lib/settings/input/update-multiple-attributes-key-settings.component';
 import {
   OpenStreetMapProviderSettingsComponent
-} from '@home/components/widget/lib/settings/map/openstreet-map-provider-settings.component';
-import { MapProviderSettingsComponent } from '@home/components/widget/lib/settings/map/map-provider-settings.component';
-import { MapSettingsComponent } from '@home/components/widget/lib/settings/map/map-settings.component';
-import { MapWidgetSettingsComponent } from '@home/components/widget/lib/settings/map/map-widget-settings.component';
+} from '@home/components/widget/lib/settings/map/legacy/openstreet-map-provider-settings.component';
+import { MapProviderSettingsComponent } from '@home/components/widget/lib/settings/map/legacy/map-provider-settings.component';
+import { MapSettingsLegacyComponent } from '@home/components/widget/lib/settings/map/legacy/map-settings-legacy.component';
+import { MapWidgetSettingsLegacyComponent } from '@home/components/widget/lib/settings/map/legacy/map-widget-settings-legacy.component';
 import {
   GoogleMapProviderSettingsComponent
-} from '@home/components/widget/lib/settings/map/google-map-provider-settings.component';
+} from '@home/components/widget/lib/settings/map/legacy/google-map-provider-settings.component';
 import {
   HereMapProviderSettingsComponent
-} from '@home/components/widget/lib/settings/map/here-map-provider-settings.component';
+} from '@home/components/widget/lib/settings/map/legacy/here-map-provider-settings.component';
 import {
   TencentMapProviderSettingsComponent
-} from '@home/components/widget/lib/settings/map/tencent-map-provider-settings.component';
+} from '@home/components/widget/lib/settings/map/legacy/tencent-map-provider-settings.component';
 import {
   ImageMapProviderSettingsComponent
-} from '@home/components/widget/lib/settings/map/image-map-provider-settings.component';
+} from '@home/components/widget/lib/settings/map/legacy/image-map-provider-settings.component';
 import {
   DatasourcesKeyAutocompleteComponent
-} from '@home/components/widget/lib/settings/map/datasources-key-autocomplete.component';
-import { CommonMapSettingsComponent } from '@home/components/widget/lib/settings/map/common-map-settings.component';
-import { MarkersSettingsComponent } from '@home/components/widget/lib/settings/map/markers-settings.component';
-import { PolygonSettingsComponent } from '@home/components/widget/lib/settings/map/polygon-settings.component';
-import { CircleSettingsComponent } from '@home/components/widget/lib/settings/map/circle-settings.component';
+} from '@home/components/widget/lib/settings/map/legacy/datasources-key-autocomplete.component';
+import { CommonMapSettingsComponent } from '@home/components/widget/lib/settings/map/legacy/common-map-settings.component';
+import { MarkersSettingsComponent } from '@home/components/widget/lib/settings/map/legacy/markers-settings.component';
+import { PolygonSettingsComponent } from '@home/components/widget/lib/settings/map/legacy/polygon-settings.component';
+import { CircleSettingsComponent } from '@home/components/widget/lib/settings/map/legacy/circle-settings.component';
 import {
   MarkerClusteringSettingsComponent
-} from '@home/components/widget/lib/settings/map/marker-clustering-settings.component';
-import { MapEditorSettingsComponent } from '@home/components/widget/lib/settings/map/map-editor-settings.component';
-import { RouteMapSettingsComponent } from '@home/components/widget/lib/settings/map/route-map-settings.component';
+} from '@home/components/widget/lib/settings/map/legacy/marker-clustering-settings.component';
+import { MapEditorSettingsComponent } from '@home/components/widget/lib/settings/map/legacy/map-editor-settings.component';
+import { RouteMapSettingsComponent } from '@home/components/widget/lib/settings/map/legacy/route-map-settings.component';
 import {
   RouteMapWidgetSettingsComponent
-} from '@home/components/widget/lib/settings/map/route-map-widget-settings.component';
+} from '@home/components/widget/lib/settings/map/legacy/route-map-widget-settings.component';
 import {
   TripAnimationWidgetSettingsComponent
-} from '@home/components/widget/lib/settings/map/trip-animation-widget-settings.component';
+} from '@home/components/widget/lib/settings/map/legacy/trip-animation-widget-settings.component';
 import {
   TripAnimationCommonSettingsComponent
-} from '@home/components/widget/lib/settings/map/trip-animation-common-settings.component';
+} from '@home/components/widget/lib/settings/map/legacy/trip-animation-common-settings.component';
 import {
   TripAnimationMarkerSettingsComponent
-} from '@home/components/widget/lib/settings/map/trip-animation-marker-settings.component';
+} from '@home/components/widget/lib/settings/map/legacy/trip-animation-marker-settings.component';
 import {
   TripAnimationPathSettingsComponent
-} from '@home/components/widget/lib/settings/map/trip-animation-path-settings.component';
+} from '@home/components/widget/lib/settings/map/legacy/trip-animation-path-settings.component';
 import {
   TripAnimationPointSettingsComponent
-} from '@home/components/widget/lib/settings/map/trip-animation-point-settings.component';
+} from '@home/components/widget/lib/settings/map/legacy/trip-animation-point-settings.component';
 import {
   GatewayLogsSettingsComponent
 } from '@home/components/widget/lib/settings/gateway/gateway-logs-settings.component';
@@ -268,6 +255,15 @@ import {
 import {
   QuickLinksWidgetSettingsComponent
 } from '@home/components/widget/lib/settings/home-page/quick-links-widget-settings.component';
+import {
+  BlobEntitiesWidgetSettingsComponent
+} from '@home/components/widget/lib/settings/files/blob-entities-widget-settings.component';
+import {
+  CustomSchedulerEventTypeComponent
+} from '@home/components/widget/lib/settings/scheduler/custom-scheduler-event-type.component';
+import {
+  SchedulerEventsWidgetSettingsComponent
+} from '@home/components/widget/lib/settings/scheduler/scheduler-events-widget-settings.component';
 import {
   ValueCardWidgetSettingsComponent
 } from '@home/components/widget/lib/settings/cards/value-card-widget-settings.component';
@@ -371,6 +367,19 @@ import {
 import {
   SegmentedButtonWidgetSettingsComponent
 } from '@home/components/widget/lib/settings/button/segmented-button-widget-settings.component';
+import {
+  ValueStepperWidgetSettingsComponent
+} from '@home/components/widget/lib/settings/control/value-stepper-widget-settings.component';
+import { MapWidgetSettingsComponent } from '@home/components/widget/lib/settings/map/map-widget-settings.component';
+import {
+  HtmlContainerWidgetSettingsComponent
+} from '@home/components/widget/lib/settings/html/html-container-widget-settings.component';
+import {
+  ApiUsageWidgetSettingsComponent
+} from "@home/components/widget/lib/settings/cards/api-usage-widget-settings.component";
+import {
+  ApiUsageDataKeyRowComponent
+} from "@home/components/widget/lib/settings/cards/api-usage-data-key-row.component";
 
 @NgModule({
   declarations: [
@@ -458,12 +467,12 @@ import {
     MarkerClusteringSettingsComponent,
     MapEditorSettingsComponent,
     RouteMapSettingsComponent,
-    MapSettingsComponent,
+    MapSettingsLegacyComponent,
     TripAnimationCommonSettingsComponent,
     TripAnimationMarkerSettingsComponent,
     TripAnimationPathSettingsComponent,
     TripAnimationPointSettingsComponent,
-    MapWidgetSettingsComponent,
+    MapWidgetSettingsLegacyComponent,
     RouteMapWidgetSettingsComponent,
     GatewayLogsSettingsComponent,
     GatewayServiceRPCSettingsComponent,
@@ -487,6 +496,7 @@ import {
     SingleSwitchWidgetSettingsComponent,
     ActionButtonWidgetSettingsComponent,
     SegmentedButtonWidgetSettingsComponent,
+    ValueStepperWidgetSettingsComponent,
     CommandButtonWidgetSettingsComponent,
     PowerButtonWidgetSettingsComponent,
     SliderWidgetSettingsComponent,
@@ -502,7 +512,14 @@ import {
     LabelCardWidgetSettingsComponent,
     LabelValueCardWidgetSettingsComponent,
     UnreadNotificationWidgetSettingsComponent,
-    ScadaSymbolWidgetSettingsComponent
+    ScadaSymbolWidgetSettingsComponent,
+    MapWidgetSettingsComponent,
+    HtmlContainerWidgetSettingsComponent,
+    BlobEntitiesWidgetSettingsComponent,
+    CustomSchedulerEventTypeComponent,
+    SchedulerEventsWidgetSettingsComponent,
+    ApiUsageWidgetSettingsComponent,
+    ApiUsageDataKeyRowComponent
   ],
   imports: [
     CommonModule,
@@ -595,12 +612,12 @@ import {
     MarkerClusteringSettingsComponent,
     MapEditorSettingsComponent,
     RouteMapSettingsComponent,
-    MapSettingsComponent,
+    MapSettingsLegacyComponent,
     TripAnimationCommonSettingsComponent,
     TripAnimationMarkerSettingsComponent,
     TripAnimationPathSettingsComponent,
     TripAnimationPointSettingsComponent,
-    MapWidgetSettingsComponent,
+    MapWidgetSettingsLegacyComponent,
     RouteMapWidgetSettingsComponent,
     GatewayLogsSettingsComponent,
     GatewayServiceRPCSettingsComponent,
@@ -624,6 +641,7 @@ import {
     SingleSwitchWidgetSettingsComponent,
     ActionButtonWidgetSettingsComponent,
     SegmentedButtonWidgetSettingsComponent,
+    ValueStepperWidgetSettingsComponent,
     CommandButtonWidgetSettingsComponent,
     PowerButtonWidgetSettingsComponent,
     SliderWidgetSettingsComponent,
@@ -639,7 +657,13 @@ import {
     LabelCardWidgetSettingsComponent,
     LabelValueCardWidgetSettingsComponent,
     UnreadNotificationWidgetSettingsComponent,
-    ScadaSymbolWidgetSettingsComponent
+    ScadaSymbolWidgetSettingsComponent,
+    MapWidgetSettingsComponent,
+    HtmlContainerWidgetSettingsComponent,
+    BlobEntitiesWidgetSettingsComponent,
+    CustomSchedulerEventTypeComponent,
+    SchedulerEventsWidgetSettingsComponent,
+    ApiUsageWidgetSettingsComponent
   ]
 })
 export class WidgetSettingsModule {

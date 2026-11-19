@@ -1,19 +1,6 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import { Component, DestroyRef, EventEmitter, Input, OnInit, Output, ViewEncapsulation } from '@angular/core';
 import { PageComponent } from '@shared/components/page.component';
 import { defaultTimewindowStyle, TimewindowStyle } from '@shared/models/widget-settings.models';
@@ -26,11 +13,12 @@ import { deepClone } from '@core/utils';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 @Component({
-  selector: 'tb-timewindow-style-panel',
-  templateUrl: './timewindow-style-panel.component.html',
-  providers: [],
-  styleUrls: ['./timewindow-style-panel.component.scss'],
-  encapsulation: ViewEncapsulation.None
+    selector: 'tb-timewindow-style-panel',
+    templateUrl: './timewindow-style-panel.component.html',
+    providers: [],
+    styleUrls: ['./timewindow-style-panel.component.scss'],
+    encapsulation: ViewEncapsulation.None,
+    standalone: false
 })
 export class TimewindowStylePanelComponent extends PageComponent implements OnInit {
 
@@ -76,7 +64,6 @@ export class TimewindowStylePanelComponent extends PageComponent implements OnIn
     ).subscribe((timewindowStyle: TimewindowStyle) => {
       if (this.timewindowStyleFormGroup.valid) {
         this.updatePreviewStyle(timewindowStyle);
-        setTimeout(() => {this.popover?.updatePosition();}, 0);
       }
     });
     this.timewindowStyleFormGroup.get('showIcon').valueChanges.pipe(

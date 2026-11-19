@@ -1,18 +1,6 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.actors.tenant;
 
 import org.junit.Before;
@@ -27,15 +15,21 @@ import org.thingsboard.server.actors.TbActorSystemSettings;
 import org.thingsboard.server.actors.TbEntityActorId;
 import org.thingsboard.server.actors.ruleChain.RuleChainActor;
 import org.thingsboard.server.actors.ruleChain.RuleChainToRuleChainMsg;
+import org.thingsboard.server.actors.service.DefaultActorService;
 import org.thingsboard.server.actors.shared.RuleChainErrorActor;
 import org.thingsboard.server.common.data.ApiUsageState;
+import org.thingsboard.server.common.data.ApiUsageStateValue;
+import org.thingsboard.server.common.data.id.ApiUsageStateId;
 import org.thingsboard.server.common.data.id.DeviceId;
 import org.thingsboard.server.common.data.id.RuleChainId;
 import org.thingsboard.server.common.data.id.TenantId;
+import org.thingsboard.server.common.data.page.PageData;
 import org.thingsboard.server.common.data.plugin.ComponentLifecycleEvent;
 import org.thingsboard.server.common.data.rule.RuleChain;
+import org.thingsboard.server.common.data.rule.RuleChainType;
 import org.thingsboard.server.common.msg.TbMsg;
 import org.thingsboard.server.common.msg.plugin.ComponentLifecycleMsg;
+import org.thingsboard.server.common.msg.queue.PartitionChangeMsg;
 import org.thingsboard.server.common.msg.queue.ServiceType;
 import org.thingsboard.server.common.msg.queue.TopicPartitionInfo;
 import org.thingsboard.server.common.msg.rule.engine.DeviceDeleteMsg;
@@ -45,6 +39,7 @@ import org.thingsboard.server.queue.discovery.PartitionService;
 import org.thingsboard.server.queue.discovery.TbServiceInfoProvider;
 import org.thingsboard.server.service.apiusage.TbApiUsageStateService;
 
+import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -54,6 +49,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.thingsboard.server.actors.service.DefaultActorService.RULE_DISPATCHER_NAME;
@@ -112,10 +108,87 @@ public class TenantActorTest {
     }
 
     @Test
+    public void partitionChangeDoesNotInitRuleChainsWhenRuleEngineExecutionDisabled() throws Exception {
+        ApiUsageState disabledState = new ApiUsageState();
+        disabledState.setReExecState(ApiUsageStateValue.DISABLED);
+        when(systemContext.getApiUsageStateService().getApiUsageState(tenantId)).thenReturn(disabledState);
+        when(ruleChainService.findTenantRuleChainsByType(eq(tenantId), eq(RuleChainType.CORE), any())).thenReturn(PageData.emptyPageData());
+
+        tenantActor.init(mock(TbActorCtx.class));
+        tenantActor.doProcess(PartitionChangeMsg.forAllTenants(ServiceType.TB_RULE_ENGINE));
+
+        verify(ruleChainService, never()).findTenantRuleChainsByType(any(), any(), any());
+    }
+
+    @Test
+    public void partitionChangeInitsRuleChainsWhenTenantBecomesManagedAndRuleEngineExecutionEnabled() throws Exception {
+        when(partitionService.isManagedByCurrentService(tenantId)).thenReturn(false);
+        when(ruleChainService.findTenantRuleChainsByType(eq(tenantId), eq(RuleChainType.CORE), any())).thenReturn(PageData.emptyPageData());
+
+        tenantActor.init(mock(TbActorCtx.class));
+        verify(ruleChainService, never()).findTenantRuleChainsByType(any(), any(), any());
+
+        when(partitionService.isManagedByCurrentService(tenantId)).thenReturn(true);
+        tenantActor.doProcess(PartitionChangeMsg.forAllTenants(ServiceType.TB_RULE_ENGINE));
+
+        verify(ruleChainService).findTenantRuleChainsByType(eq(tenantId), eq(RuleChainType.CORE), any());
+    }
+
+    @Test
+    public void apiUsageStateChangeDoesNotTouchRuleChainsOnCoreOnlyService() throws Exception {
+        when(systemContext.getServiceInfoProvider().isService(ServiceType.TB_RULE_ENGINE)).thenReturn(false);
+        when(ruleChainService.findTenantRuleChainsByType(eq(tenantId), eq(RuleChainType.CORE), any())).thenReturn(PageData.emptyPageData());
+
+        tenantActor.init(mock(TbActorCtx.class));
+        processReExecStateChanges(ApiUsageStateValue.ENABLED, ApiUsageStateValue.DISABLED, ApiUsageStateValue.ENABLED);
+
+        verify(ruleChainService, never()).findTenantRuleChainsByType(any(), any(), any());
+    }
+
+    @Test
+    public void apiUsageStateChangeDoesNotInitRuleChainsWhenTenantNotManagedByCurrentService() throws Exception {
+        when(partitionService.isManagedByCurrentService(tenantId)).thenReturn(false);
+        RuleChain ruleChain = new RuleChain(ruleChainId);
+        ruleChain.setType(RuleChainType.CORE);
+        when(ruleChainService.findTenantRuleChainsByType(eq(tenantId), eq(RuleChainType.CORE), any()))
+                .thenReturn(new PageData<>(List.of(ruleChain), 1, 1, false));
+        TbActorCtx ctx = mock(TbActorCtx.class);
+
+        tenantActor.init(ctx);
+        processReExecStateChanges(ApiUsageStateValue.ENABLED, ApiUsageStateValue.DISABLED, ApiUsageStateValue.ENABLED);
+
+        verify(ctx, never()).getOrCreateChildActor(eq(new TbEntityActorId(ruleChainId)), any(), any(), any());
+    }
+
+    @Test
+    public void apiUsageStateChangeDestroysAndInitsRuleChainsWhenTenantManagedByCurrentService() throws Exception {
+        when(ruleChainService.findTenantRuleChainsByType(eq(tenantId), eq(RuleChainType.CORE), any())).thenReturn(PageData.emptyPageData());
+
+        tenantActor.init(mock(TbActorCtx.class));
+        verify(ruleChainService, times(1)).findTenantRuleChainsByType(eq(tenantId), eq(RuleChainType.CORE), any());
+
+        processReExecStateChanges(ApiUsageStateValue.DISABLED);
+        verify(ruleChainService, times(2)).findTenantRuleChainsByType(eq(tenantId), eq(RuleChainType.CORE), any());
+
+        processReExecStateChanges(ApiUsageStateValue.ENABLED);
+        verify(ruleChainService, times(3)).findTenantRuleChainsByType(eq(tenantId), eq(RuleChainType.CORE), any());
+    }
+
+    private void processReExecStateChanges(ApiUsageStateValue... reExecStates) {
+        for (ApiUsageStateValue reExecState : reExecStates) {
+            ApiUsageState state = new ApiUsageState();
+            state.setReExecState(reExecState);
+            when(systemContext.getApiUsageStateService().getApiUsageState(tenantId)).thenReturn(state);
+            tenantActor.doProcess(new ComponentLifecycleMsg(tenantId, new ApiUsageStateId(UUID.randomUUID()), ComponentLifecycleEvent.UPDATED));
+        }
+    }
+
+    @Test
     public void ruleChainErrorActorTest() throws Exception {
         TbActorSystemSettings settings = new TbActorSystemSettings(0, 0, 0);
         TbActorSystem system = spy(new DefaultTbActorSystem(settings));
         system.createDispatcher(RULE_DISPATCHER_NAME, mock());
+        system.createDispatcher(DefaultActorService.CF_MANAGER_DISPATCHER_NAME, mock());
         TbActorMailbox tenantCtx = new TbActorMailbox(system, settings, null, mock(), mock(), null);
         tenantActor.init(tenantCtx);
 

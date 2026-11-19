@@ -1,19 +1,5 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-License-Identifier: Apache-2.0
 import { NgModule } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { SharedModule } from '@app/shared/shared.module';
@@ -39,7 +25,7 @@ import { EdgesOverviewWidgetComponent } from '@home/components/widget/lib/edges-
 import { JsonInputWidgetComponent } from '@home/components/widget/lib/json-input-widget.component';
 import { QrCodeWidgetComponent } from '@home/components/widget/lib/qrcode-widget.component';
 import { MarkdownWidgetComponent } from '@home/components/widget/lib/markdown-widget.component';
-import { SelectEntityDialogComponent } from '@home/components/widget/lib/maps/dialogs/select-entity-dialog.component';
+import { SelectEntityDialogComponent } from '@home/components/widget/lib/maps-legacy/dialogs/select-entity-dialog.component';
 import { HomePageWidgetsModule } from '@home/components/widget/lib/home-page/home-page-widgets.module';
 import { WIDGET_COMPONENTS_MODULE_TOKEN } from '@home/components/tokens';
 import { FlotWidgetComponent } from '@home/components/widget/lib/flot-widget.component';
@@ -88,6 +74,14 @@ import {
 import { EllipsisChipListDirective } from '@shared/directives/ellipsis-chip-list.directive';
 import { ScadaSymbolWidgetComponent } from '@home/components/widget/lib/scada/scada-symbol-widget.component';
 import { TwoSegmentButtonWidgetComponent } from '@home/components/widget/lib/button/two-segment-button-widget.component';
+import { ValueStepperWidgetComponent } from '@home/components/widget/lib/rpc/value-stepper-widget.component';
+import { MapWidgetComponent } from '@home/components/widget/lib/maps/map-widget.component';
+import {
+  SelectMapEntityPanelComponent
+} from '@home/components/widget/lib/maps/panels/select-map-entity-panel.component';
+import { MapTimelinePanelComponent } from '@home/components/widget/lib/maps/panels/map-timeline-panel.component';
+import { HtmlContainerWidgetComponent } from '@home/components/widget/lib/html/html-container-widget.component';
+import { ApiUsageWidgetComponent } from "@home/components/widget/lib/cards/api-usage-widget.component";
 
 @NgModule({
   declarations: [
@@ -128,6 +122,7 @@ import { TwoSegmentButtonWidgetComponent } from '@home/components/widget/lib/but
     TwoSegmentButtonWidgetComponent,
     CommandButtonWidgetComponent,
     PowerButtonWidgetComponent,
+    ValueStepperWidgetComponent,
     SliderWidgetComponent,
     ToggleButtonWidgetComponent,
     TimeSeriesChartWidgetComponent,
@@ -141,7 +136,12 @@ import { TwoSegmentButtonWidgetComponent } from '@home/components/widget/lib/but
     LabelValueCardWidgetComponent,
     UnreadNotificationWidgetComponent,
     NotificationTypeFilterPanelComponent,
-    ScadaSymbolWidgetComponent
+    ScadaSymbolWidgetComponent,
+    SelectMapEntityPanelComponent,
+    MapTimelinePanelComponent,
+    MapWidgetComponent,
+    HtmlContainerWidgetComponent,
+    ApiUsageWidgetComponent
   ],
   imports: [
     CommonModule,
@@ -190,6 +190,7 @@ import { TwoSegmentButtonWidgetComponent } from '@home/components/widget/lib/but
     TwoSegmentButtonWidgetComponent,
     CommandButtonWidgetComponent,
     PowerButtonWidgetComponent,
+    ValueStepperWidgetComponent,
     SliderWidgetComponent,
     ToggleButtonWidgetComponent,
     TimeSeriesChartWidgetComponent,
@@ -202,7 +203,10 @@ import { TwoSegmentButtonWidgetComponent } from '@home/components/widget/lib/but
     LabelValueCardWidgetComponent,
     UnreadNotificationWidgetComponent,
     NotificationTypeFilterPanelComponent,
-    ScadaSymbolWidgetComponent
+    ScadaSymbolWidgetComponent,
+    MapWidgetComponent,
+    HtmlContainerWidgetComponent,
+    ApiUsageWidgetComponent
   ],
   providers: [
     {provide: WIDGET_COMPONENTS_MODULE_TOKEN, useValue: WidgetComponentsModule},

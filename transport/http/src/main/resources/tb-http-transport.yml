@@ -1,25 +1,19 @@
 #
-# Copyright © 2016-2024 The Thingsboard Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+# SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+# SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 #
 
 # Server common properties
+# Configures the HTTP server bind address, port, SSL/TLS settings, and HTTP/2 support.
 server:
   # Server bind address
   address: "${HTTP_BIND_ADDRESS:0.0.0.0}"
   # Server bind port
   port: "${HTTP_BIND_PORT:8081}"
+  tomcat:
+    # Maximum number of GET and POST request parameters Tomcat parses per request
+    max-parameter-count: "${SERVER_TOMCAT_MAX_PARAMETER_COUNT:10000}"
   # Server SSL configuration
   ssl:
     # Enable/disable SSL support
@@ -54,23 +48,25 @@ server:
     enabled: "${HTTP2_ENABLED:true}"
 
 # Spring common parameters
+# Controls Spring Boot framework-level settings such as circular references and multipart upload limits.
 spring.main.allow-circular-references: "true" # Spring Boot configuration property that controls whether circular dependencies between beans are allowed.
 spring.servlet.multipart.max-file-size: "${SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE:50MB}" # Total file size cannot exceed 50MB when configuring file uploads
 spring.servlet.multipart.max-request-size: "${SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE:50MB}" # Total request size for a multipart/form-data cannot exceed 50MB
 
-# Zookeeper connection parameters. Used for service discovery.
+# ZooKeeper connection parameters
+# Controls ZooKeeper-based service discovery and cluster coordination for microservice deployments.
 zk:
-  # Enable/disable zookeeper discovery service.
+  # Enable/disable ZooKeeper discovery service.
   enabled: "${ZOOKEEPER_ENABLED:false}"
-  # Zookeeper connect string
+  # ZooKeeper connect string
   url: "${ZOOKEEPER_URL:localhost:2181}"
-  # Zookeeper retry interval in milliseconds
+  # ZooKeeper retry interval in milliseconds
   retry_interval_ms: "${ZOOKEEPER_RETRY_INTERVAL_MS:3000}"
-  # Zookeeper connection timeout in milliseconds
+  # ZooKeeper connection timeout in milliseconds
   connection_timeout_ms: "${ZOOKEEPER_CONNECTION_TIMEOUT_MS:3000}"
-  # Zookeeper session timeout in milliseconds
+  # ZooKeeper session timeout in milliseconds
   session_timeout_ms: "${ZOOKEEPER_SESSION_TIMEOUT_MS:3000}"
-  # Name of the directory in zookeeper 'filesystem'
+  # Name of the directory in ZooKeeper 'filesystem'
   zk_dir: "${ZOOKEEPER_NODES_DIR:/thingsboard}"
   # The recalculate_delay property is recommended in a microservices architecture setup for rule-engine services.
   # This property provides a pause to ensure that when a rule-engine service is restarted, other nodes don't immediately attempt to recalculate their partitions.
@@ -78,6 +74,7 @@ zk:
   recalculate_delay: "${ZOOKEEPER_RECALCULATE_DELAY_MS:0}"
 
 # Cache parameters
+# Defines the cache backend type and per-entity cache configuration such as TTL and maximum size.
 cache:
   # caffeine or redis
   type: "${CACHE_TYPE:redis}"
@@ -86,7 +83,8 @@ cache:
     timeToLiveInMinutes: "${CACHE_SPECS_ENTITY_LIMITS_TTL:5}" # Entity limits cache TTL
     maxSize: "${CACHE_SPECS_ENTITY_LIMITS_MAX_SIZE:100000}" # 0 means the cache is disabled
 
-# Redis configuration parameters
+# Redis/Valkey configuration parameters
+# Configures connection mode (standalone, cluster, sentinel), credentials, SSL, and connection pool settings.
 redis:
   # standalone or cluster or sentinel
   connection:
@@ -112,6 +110,9 @@ redis:
     nodes: "${REDIS_NODES:}"
     # Maximum number of redirects to follow when executing commands across the cluster.
     max-redirects: "${REDIS_MAX_REDIRECTS:12}"
+    # Period in seconds of the background refresh of the cluster slot map. It finds slots that moved to another node
+    # (after a failover, or when a node gets a new IP) even before a command to the old node fails. Set 0 to disable.
+    topology-refresh-period-sec: "${REDIS_CLUSTER_TOPOLOGY_REFRESH_PERIOD_SEC:30}"
     # if set false will be used pool config build from values of the pool config section
     useDefaultPoolConfig: "${REDIS_USE_DEFAULT_POOL_CONFIG:true}"
   sentinel:
@@ -123,10 +124,12 @@ redis:
     password: "${REDIS_SENTINEL_PASSWORD:}"
     # if set false will be used pool config build from values of the pool config section
     useDefaultPoolConfig: "${REDIS_USE_DEFAULT_POOL_CONFIG:true}"
-  # db index
+  # Redis logical database index to select after connecting.
   db: "${REDIS_DB:0}"
-  # db password
+  # Password for Redis authentication (leave empty if not required).
   password: "${REDIS_PASSWORD:}"
+  # Redis username for ACL authentication (Redis 6.0+). Leave empty for legacy password-only auth
+  username: "${REDIS_USERNAME:}"
   ssl:
     # Enable/disable secure connection
     enabled: "${TB_REDIS_SSL_ENABLED:false}"
@@ -147,9 +150,9 @@ redis:
     # Minumum number of idle connections that can be maintained in the pool without being closed
     minIdle: "${REDIS_POOL_CONFIG_MIN_IDLE:16}"
     # Enable/Disable PING command send when a connection is borrowed
-    testOnBorrow: "${REDIS_POOL_CONFIG_TEST_ON_BORROW:true}"
+    testOnBorrow: "${REDIS_POOL_CONFIG_TEST_ON_BORROW:false}"
     # The property is used to specify whether to test the connection before returning it to the connection pool.
-    testOnReturn: "${REDIS_POOL_CONFIG_TEST_ON_RETURN:true}"
+    testOnReturn: "${REDIS_POOL_CONFIG_TEST_ON_RETURN:false}"
     # The property is used in the context of connection pooling in Redis
     testWhileIdle: "${REDIS_POOL_CONFIG_TEST_WHILE_IDLE:true}"
     # Minimum amount of time that an idle connection should be idle before it can be evicted from the connection pool. Value set in milliseconds
@@ -164,7 +167,10 @@ redis:
     blockWhenExhausted: "${REDIS_POOL_CONFIG_BLOCK_WHEN_EXHAUSTED:true}"
 
 # HTTP server parameters
+# Configures HTTP transport request timeouts, payload limits, session management, JSON processing, logging, and statistics.
 transport:
+  # Size of the thread pool that executes transport API callbacks (session registration, telemetry/attribute and RPC responses, entity update notifications, and the tenant profile fetch on a cache miss). Bounds how many such callbacks - including those that block on a backend round-trip - can run concurrently.
+  callback_thread_pool_size: "${TB_TRANSPORT_CALLBACK_THREAD_POOL_SIZE:20}"
   http:
     # HTTP request processing timeout in milliseconds
     request_timeout: "${HTTP_REQUEST_TIMEOUT:60000}"
@@ -184,6 +190,14 @@ transport:
     inactivity_timeout: "${TB_TRANSPORT_SESSIONS_INACTIVITY_TIMEOUT:600000}"
     # Interval of periodic check for expired sessions and report of the changes to session last activity time
     report_timeout: "${TB_TRANSPORT_SESSIONS_REPORT_TIMEOUT:3000}"
+  activity:
+    # This property specifies the strategy for reporting activity events within each reporting period.
+    # The accepted values are 'FIRST', 'LAST', 'FIRST_AND_LAST' and 'ALL'.
+    # <ul><li> 'FIRST': Only the first activity event in each reporting period is reported.</li>
+    # <li> 'LAST': Only the last activity event in the reporting period is reported.</li>
+    # <li> 'FIRST_AND_LAST': Both the first and last activity events in the reporting period are reported.</li>
+    # <li> 'ALL': All activity events in the reporting period are reported.</li></ul>
+    reporting_strategy: "${TB_TRANSPORT_ACTIVITY_REPORTING_STRATEGY:LAST}"
   json:
     # Cast String data types to Numeric if possible when processing Telemetry/Attributes JSON
     type_cast_enabled: "${JSON_TYPE_CAST_ENABLED:true}"
@@ -199,8 +213,18 @@ transport:
     enabled: "${TB_TRANSPORT_STATS_ENABLED:true}"
     # Interval of transport statistics logging
     print-interval-ms: "${TB_TRANSPORT_STATS_PRINT_INTERVAL_MS:60000}"
+  ssl:
+    # SSL/TLS settings for the transport layer
+    certificate:
+      # X.509 certificate configuration to auto-detect and reload certificate used by transport protocols in real-time (MQTT, CoAP, LwM2M, etc.)
+      reload:
+        # Enable/disable automatic SSL certificates reload
+        enabled: "${TB_TRANSPORT_SSL_CERTIFICATE_RELOAD_ENABLED:true}"
+        # Check interval in seconds for certificates reload
+        check_interval_seconds: "${TB_TRANSPORT_SSL_CERTIFICATE_RELOAD_CHECK_INTERVAL_SECONDS:60}"
 
 # Queue configuration parameters
+# Configures the messaging queue backend (Kafka), topic definitions, partitioning, and per-service consumer settings.
 queue:
   type: "${TB_QUEUE_TYPE:kafka}" # kafka (Apache Kafka)
   prefix: "${TB_QUEUE_PREFIX:}" # Global queue prefix. If specified, prefix is added before default topic name: 'prefix.default_topic_name'. Prefix is applied to all topics (and consumer groups for kafka) .
@@ -224,7 +248,7 @@ queue:
     acks: "${TB_KAFKA_ACKS:all}"
     # Number of retries. Resend any record whose send fails with a potentially transient error
     retries: "${TB_KAFKA_RETRIES:1}"
-    compression.type: "${TB_KAFKA_COMPRESSION_TYPE:none}" # none or gzip
+    compression.type: "${TB_KAFKA_COMPRESSION_TYPE:none}" # none, gzip or lz4
     # Default batch size. This setting gives the upper bound of the batch size to be sent
     batch.size: "${TB_KAFKA_BATCH_SIZE:16384}"
     # This variable creates a small amount of artificial delay—that is, rather than immediately sending out a record
@@ -254,11 +278,28 @@ queue:
       # The endpoint identification algorithm used by clients to validate server host name. The default value is https
       ssl.algorithm: "${TB_QUEUE_KAFKA_CONFLUENT_SSL_ALGORITHM:https}"
       # The mechanism used to authenticate Schema Registry requests. SASL/PLAIN should only be used with TLS/SSL as transport layer to ensure that clear passwords are not transmitted on the wire without encryption
+      # Set to OAUTHBEARER to authenticate via OAuth2/OIDC client-credentials (configure the oauth.* settings below)
       sasl.mechanism: "${TB_QUEUE_KAFKA_CONFLUENT_SASL_MECHANISM:PLAIN}"
       # Using JAAS Configuration for specifying multiple SASL mechanisms on a broker
       sasl.config: "${TB_QUEUE_KAFKA_CONFLUENT_SASL_JAAS_CONFIG:org.apache.kafka.common.security.plain.PlainLoginModule required username=\"CLUSTER_API_KEY\" password=\"CLUSTER_API_SECRET\";}"
       # Protocol used to communicate with brokers. Valid values are: PLAINTEXT, SSL, SASL_PLAINTEXT, SASL_SSL
       security.protocol: "${TB_QUEUE_KAFKA_CONFLUENT_SECURITY_PROTOCOL:SASL_SSL}"
+      # Optional: OAuth2 (OIDC) client-credentials settings. Applied only when sasl.mechanism is OAUTHBEARER.
+      # ThingsBoard wires Kafka's built-in OAuthBearerLoginCallbackHandler; the token is fetched and refreshed automatically.
+      oauth:
+        # Optional: OAuth2 client id
+        client-id: "${TB_QUEUE_KAFKA_CONFLUENT_OAUTH_CLIENT_ID:}"
+        # Optional: OAuth2 client secret
+        client-secret: "${TB_QUEUE_KAFKA_CONFLUENT_OAUTH_CLIENT_SECRET:}"
+        # Optional: OAuth2/OIDC token endpoint URL to request the bearer token from
+        endpoint-url: "${TB_QUEUE_KAFKA_CONFLUENT_OAUTH_ENDPOINT_URL:}"
+        # Optional: OAuth2 scope/audience requested for the token. Required by some IdPs for client-credentials (e.g. Azure AD's "api://<id>/.default")
+        scope: "${TB_QUEUE_KAFKA_CONFLUENT_OAUTH_SCOPE:}"
+    # If you override any default Kafka topic name using environment variables, you must also specify the related consumer properties
+    # for the new topic in `consumer-properties-per-topic-inline`. Otherwise, the topic will not inherit its expected configuration (e.g., max.poll.records, timeouts, etc).
+    # Format: "topic1:key1=value1,key2=value2;topic2:key=value"
+    # Example: "tb_core_modified.notifications:max.poll.records=10;tb_edge_modified:max.poll.records=10,enable.auto.commit=true"
+    consumer-properties-per-topic-inline: "${TB_QUEUE_KAFKA_CONSUMER_PROPERTIES_PER_TOPIC_INLINE:}"
     other-inline: "${TB_QUEUE_KAFKA_OTHER_PROPERTIES:}" # In this section you can specify custom parameters (semicolon separated) for Kafka consumer/producer/admin # Example "metrics.recording.level:INFO;metrics.sample.window.ms:30000"
     other: # DEPRECATED. In this section you can specify custom parameters for Kafka consumer/producer and expose the env variables to configure outside
     #  - key: "request.timeout.ms" # refer to https://docs.confluent.io/platform/current/installation/configuration/producer-configs.html#producerconfigs_request.timeout.ms
@@ -276,6 +317,8 @@ queue:
       notifications: "${TB_QUEUE_KAFKA_NOTIFICATIONS_TOPIC_PROPERTIES:retention.ms:604800000;segment.bytes:52428800;retention.bytes:1048576000;partitions:1;min.insync.replicas:1}"
       # Kafka properties for Housekeeper tasks topic
       housekeeper: "${TB_QUEUE_KAFKA_HOUSEKEEPER_TOPIC_PROPERTIES:retention.ms:604800000;segment.bytes:52428800;retention.bytes:1048576000;partitions:10;min.insync.replicas:1}"
+    # Topics cache TTL in milliseconds. 5 minutes by default
+    topics_cache_ttl_ms: "${TB_QUEUE_KAFKA_TOPICS_CACHE_TTL_MS:300000}"
   partitions:
     hash_function_name: "${TB_QUEUE_PARTITIONS_HASH_FUNCTION_NAME:murmur3_128}" # murmur3_32, murmur3_128 or sha256
   transport_api:
@@ -296,6 +339,8 @@ queue:
   core:
     # Default topic name
     topic: "${TB_QUEUE_CORE_TOPIC:tb_core}"
+    # For high-priority notifications that require minimum latency and processing time
+    notifications_topic: "${TB_QUEUE_CORE_NOTIFICATIONS_TOPIC:tb_core.notifications}"
     # Interval in milliseconds to poll messages by Core microservices
     poll-interval: "${TB_QUEUE_CORE_POLL_INTERVAL_MS:25}"
     # Amount of partitions used by Core microservices
@@ -326,6 +371,8 @@ queue:
   rule-engine:
     # Deprecated. It will be removed in the nearest releases
     topic: "${TB_QUEUE_RULE_ENGINE_TOPIC:tb_rule_engine}"
+    # For high-priority notifications that require minimum latency and processing time
+    notifications_topic: "${TB_QUEUE_RULE_ENGINE_NOTIFICATIONS_TOPIC:tb_rule_engine.notifications}"
     # Interval in milliseconds to poll messages by Rule Engine
     poll-interval: "${TB_QUEUE_RULE_ENGINE_POLL_INTERVAL_MS:25}"
     # Timeout for processing a message pack of Rule Engine
@@ -342,12 +389,14 @@ queue:
     poll_interval: "${TB_QUEUE_TRANSPORT_NOTIFICATIONS_POLL_INTERVAL_MS:25}"
 
 # General service parameters
+# Defines the service type and unique identifier used for service discovery and cluster coordination.
 service:
   type: "${TB_SERVICE_TYPE:tb-transport}" # type of service
   # Unique id for this service (autogenerated if empty)
   id: "${TB_SERVICE_ID:}"
 
 # Usage statistics parameters
+# Controls reporting of API usage statistics at the system, tenant, and optional customer level.
 usage:
   stats:
     report:
@@ -356,22 +405,29 @@ usage:
       # Enable/Disable collection of statistics about API usage on a customer level
       enabled_per_customer: "${USAGE_STATS_REPORT_PER_CUSTOMER_ENABLED:false}"
       # Interval of reporting the statistics. By default, the summarized statistics are sent every 10 seconds
-      interval: "${USAGE_STATS_REPORT_INTERVAL:10}"
+      interval: "${USAGE_STATS_REPORT_INTERVAL:60}"
+      # Reporting interval for urgent keys (e.g. SMS, Email) that require quicker usage state updates
+      urgent_interval: "${USAGE_STATS_REPORT_URGENT_INTERVAL:10}"
+      # Amount of statistic messages in pack
+      pack_size: "${USAGE_STATS_REPORT_PACK_SIZE:1024}"
 
 # Metrics parameters
+# Enables or disables actuator metrics collection and exposure for monitoring integrations such as Prometheus.
 metrics:
   # Enable/disable actuator metrics.
   enabled: "${METRICS_ENABLED:false}"
 
 # General management parameters
+# Configures Spring Boot Actuator management endpoints, including which endpoints are exposed over HTTP.
 management:
   endpoints:
     web:
       exposure:
         # Expose metrics endpoint (use value 'prometheus' to enable prometheus metrics).
-        include: '${METRICS_ENDPOINTS_EXPOSE:info}'
+        include: "${METRICS_ENDPOINTS_EXPOSE:info}"
 
 # Notification system parameters
+# Configures notification rules, including deduplication windows to prevent repeated alerts for the same trigger.
 notification_system:
   rules:
     # Semicolon-separated deduplication durations (in millis) for trigger types. Format: 'NotificationRuleTriggerType1:123;NotificationRuleTriggerType2:456'

@@ -1,18 +1,6 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.rule.engine.debug;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -44,6 +32,7 @@ import org.thingsboard.server.common.msg.TbMsgMetaData;
 import org.thingsboard.server.common.msg.queue.PartitionChangeMsg;
 
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -63,13 +52,14 @@ import static org.thingsboard.server.common.data.DataConstants.QUEUE_NAME;
         nodeDetails = "Generates messages with configurable period. Javascript function used for message generation.",
         inEnabled = false,
         configDirective = "tbActionNodeGeneratorConfig",
-        icon = "repeat"
+        icon = "repeat",
+        docUrl = "https://thingsboard.io/docs/user-guide/rule-engine-2-0/nodes/action/generator/"
 )
-
 public class TbMsgGeneratorNode implements TbNode {
 
     private static final Set<EntityType> supportedEntityTypes = EnumSet.of(EntityType.DEVICE, EntityType.ASSET, EntityType.ENTITY_VIEW,
-            EntityType.TENANT, EntityType.CUSTOMER, EntityType.USER, EntityType.DASHBOARD, EntityType.EDGE, EntityType.RULE_NODE);
+            EntityType.TENANT, EntityType.CUSTOMER, EntityType.USER, EntityType.DASHBOARD, EntityType.EDGE, EntityType.RULE_NODE,
+            EntityType.CONVERTER, EntityType.INTEGRATION, EntityType.SCHEDULER_EVENT, EntityType.BLOB_ENTITY, EntityType.ROLE, EntityType.ENTITY_GROUP);
 
     private TbMsgGeneratorNodeConfiguration config;
     private ScriptEngine scriptEngine;
@@ -160,10 +150,8 @@ public class TbMsgGeneratorNode implements TbNode {
             prevMsg = ctx.newMsg(queueName, TbMsg.EMPTY_STRING, originatorId, msg.getCustomerId(), TbMsgMetaData.EMPTY, TbMsg.EMPTY_JSON_OBJECT);
         }
         if (initialized.get()) {
-            ctx.logJsEvalRequest();
             return Futures.transformAsync(scriptEngine.executeGenerateAsync(prevMsg), generated -> {
                 log.trace("generate process response, generated {}, config {}", generated, config);
-                ctx.logJsEvalResponse();
                 prevMsg = ctx.newMsg(queueName, generated.getType(), originatorId, msg.getCustomerId(), generated.getMetaData(), generated.getData());
                 return Futures.immediateFuture(prevMsg);
             }, MoreExecutors.directExecutor()); //usually it runs on js-executor-remote-callback thread pool
@@ -223,6 +211,12 @@ public class TbMsgGeneratorNode implements TbNode {
                 if (!hasOriginatorFields) {
                     hasChanges = true;
                     ((ObjectNode) oldConfiguration).put(originatorType, EntityType.RULE_NODE.name());
+                }
+                String groupOwnerId = "groupOwnerId";
+                String groupType = "groupType";
+                if (oldConfiguration.has(groupType) || oldConfiguration.has(groupOwnerId)) {
+                    hasChanges = true;
+                    ((ObjectNode) oldConfiguration).remove(List.of(groupOwnerId, groupType));
                 }
                 break;
             default:

@@ -1,19 +1,6 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import { EntityId } from '@shared/models/id/entity-id';
 import { DataKey, FormattedData, WidgetActionDescriptor, WidgetConfig } from '@shared/models/widget.models';
 import { getDescendantProp, isDefined, isNotEmptyStr } from '@core/utils';
@@ -34,10 +21,17 @@ import {
 } from '@shared/models/js-function.models';
 import { forkJoin, Observable, of, ReplaySubject } from 'rxjs';
 import { catchError, map, share } from 'rxjs/operators';
+import type { ValueFormatProcessor } from '@shared/models/widget-settings.models';
 
 type ColumnVisibilityOptions = 'visible' | 'hidden' | 'hidden-mobile';
 
 type ColumnSelectionOptions = 'enabled' | 'disabled';
+
+export enum columnExportOptions {
+  always = 'always',
+  onlyVisible = 'onlyVisible',
+  never = 'never'
+}
 
 export interface TableWidgetSettings {
   enableSearch: boolean;
@@ -47,6 +41,8 @@ export interface TableWidgetSettings {
   enableStickyHeader: boolean;
   displayPagination: boolean;
   defaultPageSize: number;
+  pageStepIncrement: number;
+  pageStepCount: number;
   useRowStyleFunction: boolean;
   rowStyleFunction?: TbFunction;
   reserveSpaceForHiddenAction?: boolean;
@@ -58,9 +54,12 @@ export interface TableWidgetDataKeySettings {
   useCellStyleFunction: boolean;
   cellStyleFunction?: TbFunction;
   useCellContentFunction: boolean;
+  useCellContentFunctionOnExport: boolean;
   cellContentFunction?: TbFunction;
   defaultColumnVisibility?: ColumnVisibilityOptions;
   columnSelectionToDisplay?: ColumnSelectionOptions;
+  columnExportOption?: columnExportOptions;
+  disableSorting?: boolean;
 }
 
 export type ShowCellButtonActionFunction = (ctx: WidgetContext, data: EntityData | AlarmDataInfo | FormattedData) => boolean;
@@ -92,19 +91,20 @@ export interface DisplayColumn {
   def: string;
   display: boolean;
   selectable: boolean;
+  includeToExport?: columnExportOptions;
 }
 
 export type CellContentFunction = (...args: any[]) => string;
 
 export interface CellContentFunctionInfo {
   useCellContentFunction: boolean;
+  useCellContentFunctionOnExport?: boolean;
   cellContentFunction?: CompiledTbFunction<CellContentFunction>;
 }
 
 export interface CellContentInfo {
   contentFunction: Observable<CellContentFunctionInfo>;
-  units?: string;
-  decimals?: number;
+  valueFormat: ValueFormatProcessor
 }
 
 export type CellStyleFunction = (...args: any[]) => any;
@@ -145,7 +145,7 @@ export function entityDataSortOrderFromString(strSortOrder: string, columns: Ent
   if (!column) {
     column = findColumnByName(property, columns);
   }
-  if (column && column.entityKey) {
+  if (column && column.entityKey && column.sortable) {
     return {key: column.entityKey, direction};
   }
   return null;
@@ -322,12 +322,16 @@ export function getCellContentFunctionInfo(widgetContext: WidgetContext, keySett
         if (!cellContentFunction) {
           return {
             useCellContentFunction: false,
-            cellContentFunction: null
+            cellContentFunction: null,
+            useCellContentFunctionOnExport: false
           }
         } else {
+          const useCellContentFunctionOnExport = isDefined(keySettings.useCellContentFunctionOnExport) ?
+            keySettings.useCellContentFunctionOnExport : true;
           return {
             useCellContentFunction: true,
-            cellContentFunction
+            cellContentFunction,
+            useCellContentFunctionOnExport
           }
         }
       })
@@ -336,7 +340,8 @@ export function getCellContentFunctionInfo(widgetContext: WidgetContext, keySett
     cellContentFunctionInfo$ = of(
       {
         useCellContentFunction: false,
-        cellContentFunction: null
+        cellContentFunction: null,
+        useCellContentFunctionOnExport: false
       }
     )
   }
@@ -430,7 +435,7 @@ export function noDataMessage(noDataDisplayMessage: string, defaultMessage: stri
   return translate.instant(defaultMessage);
 }
 
-export function constructTableCssString(widgetConfig: WidgetConfig): string {
+export function constructTableCssString(widgetConfig: WidgetConfig, isTabsEnabled = false): string {
   const origColor = widgetConfig.color || 'rgba(0, 0, 0, 0.87)';
   const origBackgroundColor = widgetConfig.backgroundColor || 'rgb(255, 255, 255)';
   const currentEntityColor = 'rgba(221, 221, 221, 0.65)';
@@ -449,112 +454,67 @@ export function constructTableCssString(widgetConfig: WidgetConfig): string {
   const mdDarkDisabled2 = defaultColor.setAlpha(0.38).toRgbString();
   const mdDarkDivider = defaultColor.setAlpha(0.12).toRgbString();
 
-  const cssString =
-    '.mat-mdc-input-element::placeholder {\n' +
-    '   color: ' + mdDarkSecondary + ';\n' +
-    '}\n' +
-    '.mat-mdc-input-element::-moz-placeholder {\n' +
-    '   color: ' + mdDarkSecondary + ';\n' +
-    '}\n' +
-    '.mat-mdc-input-element::-webkit-input-placeholder {\n' +
-    '   color: ' + mdDarkSecondary + ';\n' +
-    '}\n' +
-    '.mat-mdc-input-element:-ms-input-placeholder {\n' +
-    '   color: ' + mdDarkSecondary + ';\n' +
-    '}\n' +
-    'mat-toolbar.mat-mdc-table-toolbar {\n' +
-    'color: ' + mdDark + ';\n' +
-    '}\n' +
-    'mat-toolbar.mat-mdc-table-toolbar:not([color="primary"]) button.mat-mdc-icon-button mat-icon {\n' +
-    'color: ' + mdDarkSecondary + ';\n' +
-    '}\n' +
-    '.mat-mdc-tab .mdc-tab__text-label {\n' +
-    'color: ' + mdDark + ';\n' +
-    '}\n' +
-    '.mat-mdc-tab-header-pagination-chevron {\n' +
-    'border-color: ' + mdDark + ';\n' +
-    '}\n' +
-    '.mat-mdc-tab-header-pagination-disabled .mat-mdc-tab-header-pagination-chevron {\n' +
-    'border-color: ' + mdDarkDisabled2 + ';\n' +
-    '}\n' +
-    '.mat-mdc-table .mat-mdc-header-row {\n' +
-    'background-color: ' + origBackgroundColor + ';\n' +
-    '}\n' +
-    '.mat-mdc-table .mat-mdc-header-cell {\n' +
-    'color: ' + mdDarkSecondary + ';\n' +
-    '}\n' +
-    '.mat-mdc-table .mat-mdc-cell, .mat-mdc-table .mat-mdc-header-cell {\n' +
-    'border-bottom-color: ' + mdDarkDivider + ';\n' +
-    '}\n' +
-    '.mat-mdc-table .mat-mdc-cell .mat-mdc-checkbox ' +
-    '.mdc-checkbox__native-control:focus:enabled:not(:checked):not(:indeterminate):not([data-indeterminate=true])'+
-    '~.mdc-checkbox__background, ' +
-    '.mat-table .mat-header-cell .mat-mdc-checkbox ' +
-    '.mdc-checkbox__native-control:focus:enabled:not(:checked):not(:indeterminate):not([data-indeterminate=true])'+
-    '~.mdc-checkbox__background {\n' +
-    'border-color: ' + mdDarkSecondary + ';\n' +
-    '}\n' +
-    '.mat-mdc-table .mat-mdc-row .mat-mdc-cell.mat-mdc-table-sticky {\n' +
-    'transition: background-color .2s;\n' +
-    '}\n' +
-    '.mat-mdc-table .mat-mdc-row.tb-current-entity {\n' +
-    'background-color: ' + currentEntityColor + ';\n' +
-    '}\n' +
-    '.mat-mdc-table .mat-mdc-row.tb-current-entity .mat-mdc-cell.mat-mdc-table-sticky {\n' +
-    'background-color: ' + currentEntityStickyColor + ';\n' +
-    '}\n' +
-    '.mat-mdc-table .mat-mdc-row:hover:not(.tb-current-entity) {\n' +
-    'background-color: ' + hoverColor + ';\n' +
-    '}\n' +
-    '.mat-mdc-table .mat-mdc-row:hover:not(.tb-current-entity) .mat-mdc-cell.mat-mdc-table-sticky {\n' +
-    'background-color: ' + hoverStickyColor + ';\n' +
-    '}\n' +
-    '.mat-mdc-table .mat-mdc-row.mat-row-select.mat-selected:not(.tb-current-entity) {\n' +
-    'background-color: ' + selectedColor + ';\n' +
-    '}\n' +
-    '.mat-mdc-table .mat-mdc-row.mat-row-select.mat-selected:not(.tb-current-entity) .mat-mdc-cell.mat-mdc-table-sticky {\n' +
-    'background-color: ' + selectedStickyColor + ';\n' +
-    '}\n' +
-    '.mat-mdc-table .mat-mdc-row .mat-mdc-cell.mat-mdc-table-sticky, .mat-mdc-table .mat-mdc-header-cell.mat-mdc-table-sticky {\n' +
-    'background-color: ' + origBackgroundColor + ';\n' +
-    '}\n' +
-    '.mat-mdc-table .mat-mdc-row {\n' +
-    'color: ' + mdDark + ';\n' +
-    'background-color: rgba(0, 0, 0, 0);\n' +
-    '}\n' +
-    '.mat-mdc-table .mat-mdc-cell button.mat-mdc-icon-button mat-icon {\n' +
-    'color: ' + mdDarkSecondary + ';\n' +
-    '}\n' +
-    '.mat-mdc-table .mat-mdc-cell button.mat-mdc-icon-button[disabled][disabled] mat-icon {\n' +
-    'color: ' + mdDarkDisabled + ';\n' +
-    '}\n' +
-    '.mat-mdc-table .mat-mdc-cell button.mat-mdc-icon-button tb-icon {\n' +
-    'color: ' + mdDarkSecondary + ';\n' +
-    '}\n' +
-    '.mat-mdc-table .mat-mdc-cell button.mat-mdc-icon-button[disabled][disabled] tb-icon {\n' +
-    'color: ' + mdDarkDisabled + ';\n' +
-    '}\n' +
-    '.mat-divider {\n' +
-    'border-top-color: ' + mdDarkDivider + ';\n' +
-    '}\n' +
-    '.mat-mdc-paginator {\n' +
-    'color: ' + mdDarkSecondary + ';\n' +
-    '}\n' +
-    '.mat-mdc-paginator button.mat-mdc-icon-button {\n' +
-    'color: ' + mdDarkSecondary + ';\n' +
-    '}\n' +
-    '.mat-mdc-paginator button.mat-mdc-icon-button[disabled][disabled] {\n' +
-    'color: ' + mdDarkDisabled + ';\n' +
-    '}\n' +
-    '.mat-mdc-paginator .mat-mdc-select-value {\n' +
-    'color: ' + mdDarkSecondary + ';\n' +
-    '}';
-  return cssString;
+  let cssString = ` {
+    --mat-toolbar-container-text-color: ${mdDark};
+    --mat-table-header-headline-color: ${mdDarkSecondary};
+    --mat-table-row-item-label-text-color: ${mdDark};
+    --mat-icon-color: ${mdDarkSecondary};
+    --mat-icon-button-disabled-icon-color: ${mdDarkDisabled};
+    --mat-divider-color: ${mdDarkDivider};
+    --mat-paginator-container-text-color: ${mdDarkSecondary};
+    --mat-icon-button-icon-color: ${mdDarkSecondary};
+    --mat-paginator-enabled-icon-color: ${mdDarkSecondary};
+    --mat-paginator-disabled-icon-color: ${mdDarkDisabled};
+    --mat-select-enabled-trigger-text-color: ${mdDarkSecondary};
+    --mat-select-disabled-trigger-text-color: ${mdDarkDisabled};
+    --mat-table-row-item-outline-color: ${mdDarkDivider};
+    --mat-checkbox-unselected-focus-icon-color: ${mdDarkSecondary};
+
+    --tb-orig-background-color: ${origBackgroundColor};
+    --tb-current-entity-color: ${currentEntityColor};
+    --tb-current-entity-sticky-color: ${currentEntityStickyColor};
+    --tb-hover-color: ${hoverColor};
+    --tb-hover-sticky-color: ${hoverStickyColor};
+    --tb-selected-color: ${selectedColor};
+    --tb-selected-sticky-color: ${selectedStickyColor};
+  }
+  `;
+  if (isTabsEnabled) {
+    cssString += `
+    .mat-mdc-tab-group {
+      --mat-tab-inactive-label-text-color: ${mdDarkSecondary};
+      --mat-tab-pagination-icon-color: ${mdDark};
+      --mat-tab-pagination-disabled-icon-color: ${mdDarkDisabled2};
+      --mat-tab-inactive-ripple-color: ${mdDarkSecondary};
+      --mat-tab-inactive-focus-label-text-color: ${mdDarkSecondary};
+      --mat-tab-inactive-hover-label-text-color: ${mdDarkSecondary};
+    }
+    `
+  }
+  return cssString ;
 }
 
-export function getHeaderTitle(dataKey: DataKey, keySettings: TableWidgetDataKeySettings, utils: UtilsService) {
-  if (isDefined(keySettings.customTitle) && isNotEmptyStr(keySettings.customTitle)) {
+export function getHeaderTitle(dataKey: DataKey, keySettings: TableWidgetDataKeySettings | undefined, utils: UtilsService) {
+  if (isNotEmptyStr(keySettings?.customTitle)) {
     return utils.customTranslation(keySettings.customTitle, keySettings.customTitle);
   }
   return dataKey.label;
+}
+
+export function buildPageStepSizeValues(pageStepCount: number, pageStepIncrement: number): Array<number> {
+  const pageSteps: Array<number> = [];
+  if (isValidPageStepCount(pageStepCount) && isValidPageStepIncrement(pageStepIncrement)) {
+    for (let i = 1; i <= pageStepCount; i++) {
+      pageSteps.push(pageStepIncrement * i);
+    }
+  }
+  return pageSteps;
+}
+
+export function isValidPageStepIncrement(value: number): boolean {
+  return Number.isInteger(value) && value > 0;
+}
+
+export function isValidPageStepCount(value: number): boolean {
+  return Number.isInteger(value) && value > 0 && value <= 100;
 }

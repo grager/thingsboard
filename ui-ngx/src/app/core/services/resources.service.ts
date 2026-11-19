@@ -1,19 +1,6 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import {
   createNgModule,
   Inject,
@@ -24,21 +11,23 @@ import {
   ɵCssSelectorList,
   ɵNG_COMP_DEF,
   ɵNG_MOD_DEF,
-  ɵNgModuleDef
+  ɵNG_PIPE_DEF,
+  ɵNgModuleDef,
+  ɵPipeDef,
+  DOCUMENT
 } from '@angular/core';
-import { DOCUMENT } from '@angular/common';
-import { forkJoin, from, Observable, ReplaySubject, throwError } from 'rxjs';
+
+import { forkJoin, from, Observable, of, ReplaySubject, throwError } from 'rxjs';
 import { HttpClient } from '@angular/common/http';
 import { IModulesMap } from '@modules/common/modules-map.models';
 import { TbResourceId } from '@shared/models/id/tb-resource-id';
-import { camelCase, isObject } from '@core/utils';
+import { camelCase, getFilenameFromHttpHeader, isObject, isUndefined } from '@core/utils';
 import { AuthService } from '@core/auth/auth.service';
 import { select, Store } from '@ngrx/store';
 import { selectIsAuthenticated } from '@core/auth/auth.selectors';
 import { AppState } from '@core/core.state';
-import { map, tap } from 'rxjs/operators';
+import { catchError, map, switchMap, tap } from 'rxjs/operators';
 import { RequestConfig } from '@core/http/http-utils';
-import { getFlexLayoutModule } from '@app/shared/legacy/flex-layout.models';
 import { isJSResource, removeTbResourcePrefix } from '@shared/models/resource.models';
 
 export interface ModuleInfo {
@@ -89,6 +78,39 @@ export const componentTypeBySelector = (modulesWithComponents: ModulesWithCompon
   }
   return found?.type;
 }
+
+// The file type of a resource URL: the extension of its last path segment, or the segment itself when it is named
+// after the type with an optional version, as in Google Maps' /maps/api/js and Google Fonts' /css and /css2.
+const resourceFileType = (url: string, baseUrl: string): string => {
+  let path: string;
+  try {
+    path = new URL(url, baseUrl).pathname;
+  } catch {
+    return undefined;
+  }
+  const segment = path.substring(path.lastIndexOf('/') + 1).toLowerCase();
+  const extensionIndex = segment.lastIndexOf('.');
+  if (extensionIndex > -1) {
+    return segment.substring(extensionIndex + 1);
+  }
+  return /^(css|js)\d*$/.exec(segment)?.[1];
+};
+
+// The file type of a resource served under a URL that does not tell it, as Google Fonts' /icon, from the Content-Type
+// of a HEAD response. Works only for same-origin URLs and servers that allow cross-origin requests.
+const resourceFileTypeFromContentType = (url: string): Observable<string> =>
+  from(fetch(url, {method: 'HEAD'})).pipe(
+    map(response => {
+      const mimeType = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
+      if (mimeType === 'text/css') {
+        return 'css';
+      } else if (/^(text|application)\/(x-)?(javascript|ecmascript)$/.test(mimeType)) {
+        return 'js';
+      }
+      return undefined;
+    }),
+    catchError(() => of(undefined))
+  );
 
 const matchesSelector = (selectors: ɵCssSelectorList, selector: string) =>
   selectors.some(s => s.some(s1 => typeof s1 === 'string' && s1 === selector));
@@ -153,17 +175,18 @@ export class ResourcesService {
       return this.loadedResources[url].asObservable();
     }
 
-    let fileType: string;
-    const match = /[./](css|less|html|htm|js)?(([?#]).*)?$/.exec(url);
-    if (match !== null) {
-      fileType = match[1];
-    }
-    if (!fileType) {
-      return throwError(() => new Error(`Unable to detect file type from url: ${url}`));
-    } else if (fileType !== 'css' && fileType !== 'js') {
-      return throwError(() => new Error(`Unsupported file type: ${fileType}`));
-    }
-    return this.loadResourceByType(fileType, url);
+    const fileType = resourceFileType(url, this.document.baseURI);
+    const fileType$ = fileType ? of(fileType) : resourceFileTypeFromContentType(url);
+    return fileType$.pipe(
+      switchMap(type => {
+        if (!type) {
+          return throwError(() => new Error(`Unable to detect file type from url: ${url}`));
+        } else if (type !== 'css' && type !== 'js') {
+          return throwError(() => new Error(`Unsupported file type: ${type}`));
+        }
+        return this.loadedResources[url] ? this.loadedResources[url].asObservable() : this.loadResourceByType(type, url);
+      })
+    );
   }
 
   public downloadResource(downloadUrl: string, config?: RequestConfig): Observable<any> {
@@ -173,7 +196,7 @@ export class ResourcesService {
     }}).pipe(
       map((response) => {
         const headers = response.headers;
-        const filename = headers.get('x-filename');
+        const filename = getFilenameFromHttpHeader(headers);
         const contentType = headers.get('content-type');
         const linkElement = document.createElement('a');
         try {
@@ -181,14 +204,8 @@ export class ResourcesService {
           const url = URL.createObjectURL(blob);
           linkElement.setAttribute('href', url);
           linkElement.setAttribute('download', filename);
-          const clickEvent = new MouseEvent('click',
-            {
-              view: window,
-              bubbles: true,
-              cancelable: false
-            }
-          );
-          linkElement.dispatchEvent(clickEvent);
+          linkElement.click();
+          setTimeout(() => URL.revokeObjectURL(url), 0);
           return null;
         } catch (e) {
           throw e;
@@ -206,42 +223,25 @@ export class ResourcesService {
     const subject = new ReplaySubject<ModulesWithComponents>();
     this.loadedModulesWithComponents[url] = subject;
 
-    forkJoin(
-      [
-        modulesMap.init(),
-        from(import('@angular/compiler'))
-      ]
-    ).subscribe(
+    forkJoin([
+      modulesMap.init(),
+      from(import('@angular/compiler'))
+    ]).subscribe(
       () => {
         // @ts-ignore
         System.import(url, undefined, meta).then(
           (module: any) => {
             try {
               const modulesWithComponents = this.extractModulesWithComponents(module);
-              this.patchModulesWithFlexLayout(modulesWithComponents).subscribe(
-                {
-                  next: modules => {
-                    if (modules.modules.length || modules.standaloneComponents.length) {
-                      try {
-                        for (const module of modules.modules) {
-                          createNgModule(module.module.type, this.injector);
-                        }
-                        this.loadedModulesWithComponents[url].next(modulesWithComponents);
-                        this.loadedModulesWithComponents[url].complete();
-                      } catch (e) {
-                        console.log(`Unable to parse module from url: ${url}`, e);
-                        this.loadedModulesWithComponents[url].error(new Error(`Unable to parse module from url: ${url}`));
-                      }
-                    } else {
-                      this.loadedModulesWithComponents[url].error(new Error(`Module '${url}' doesn't have exported modules or components!`));
-                    }
-                  },
-                  error: err => {
-                    console.log(`Unable to patch module with flexLayout, module url: ${url}`, err);
-                    this.loadedModulesWithComponents[url].error(new Error(`Unable to patch module with flexLayout, module url: ${url}`));
-                  }
+              if (modulesWithComponents.modules.length || modulesWithComponents.standaloneComponents.length) {
+                for (const module of modulesWithComponents.modules) {
+                  createNgModule(module.module.type, this.injector);
                 }
-              );
+                this.loadedModulesWithComponents[url].next(modulesWithComponents);
+                this.loadedModulesWithComponents[url].complete();
+              } else {
+                this.loadedModulesWithComponents[url].error(new Error(`Module '${url}' doesn't have exported modules or components!`));
+              }
             } catch (e) {
               console.log(`Unable to parse module from url: ${url}`, e);
               this.loadedModulesWithComponents[url].error(new Error(`Unable to parse module from url: ${url}`));
@@ -304,6 +304,29 @@ export class ResourcesService {
           module: moduleDef,
           components: []
         }
+        const declarationsDecl = moduleDef.declarations;
+        let declarations: Type<any>[];
+        if (Array.isArray(declarationsDecl)) {
+          declarations = declarationsDecl;
+        } else {
+          declarations = declarationsDecl();
+        }
+        if (declarations) {
+          for (const decl of declarations) {
+            if (ɵNG_COMP_DEF in decl) {
+              const component: ɵComponentDef<any> = decl[ɵNG_COMP_DEF];
+              if (isUndefined(component.standalone) || component.standalone) {
+                (component as any).standalone = false;
+              }
+            }
+            if (ɵNG_PIPE_DEF in decl) {
+              const pipe: ɵPipeDef<any> = decl[ɵNG_PIPE_DEF];
+              if (isUndefined(pipe.standalone) || pipe.standalone) {
+                (pipe as any).standalone = false;
+              }
+            }
+          }
+        }
         modulesWithComponents.modules.push(moduleInfo);
         const exportsDecl = moduleDef.exports;
         let exports: Type<any>[];
@@ -341,40 +364,6 @@ export class ResourcesService {
       }
     }
     return modulesWithComponents;
-  }
-
-  private patchModulesWithFlexLayout(modulesWithComponents: ModulesWithComponents): Observable<ModulesWithComponents> {
-    return getFlexLayoutModule().pipe(
-      map((flexLayoutModule) => {
-        modulesWithComponents.modules.forEach(m => {
-          if (Array.isArray(m.module.imports)) {
-            if (!m.module.imports.includes(flexLayoutModule)) {
-              m.module.imports.push(flexLayoutModule);
-            }
-          } else {
-            const imports = m.module.imports();
-            if (!imports.includes(flexLayoutModule)) {
-              imports.push(flexLayoutModule);
-              m.module.imports = imports;
-            }
-          }
-        });
-        modulesWithComponents.standaloneComponents.forEach(c => {
-          if (Array.isArray(c.dependencies)) {
-            if (!c.dependencies.includes(flexLayoutModule)) {
-              c.dependencies.push(flexLayoutModule);
-            }
-          } else {
-            const dependencies = c.dependencies();
-            if (!dependencies.includes(flexLayoutModule)) {
-              dependencies.push(flexLayoutModule);
-              c.dependencies = dependencies;
-            }
-          }
-        });
-        return modulesWithComponents;
-      })
-    );
   }
 
   private loadResourceByType(type: 'css' | 'js', url: string): Observable<any> {

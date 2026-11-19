@@ -1,19 +1,6 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import { Component, DestroyRef, forwardRef, Input, OnInit, Optional } from '@angular/core';
 import {
   ControlValueAccessor,
@@ -26,7 +13,7 @@ import { Store } from '@ngrx/store';
 import { AppState } from '@core/core.state';
 import { merge } from 'rxjs';
 import { formatValue, isDefinedAndNotNull } from '@core/utils';
-import { DataKeyConfigComponent } from '@home/components/widget/config/data-key-config.component';
+import { DataKeyConfigComponent } from '@home/components/widget/lib/settings/common/key/data-key-config.component';
 import {
   ChartBarSettings,
   ChartLabelPosition,
@@ -38,18 +25,20 @@ import {
 } from '@home/components/widget/lib/chart/chart.models';
 import { coerceBoolean } from '@shared/decorators/coercion';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { getSourceTbUnitSymbol, isNotEmptyTbUnits } from '@shared/models/unit.models';
 
 @Component({
-  selector: 'tb-chart-bar-settings',
-  templateUrl: './chart-bar-settings.component.html',
-  styleUrls: ['./../../widget-settings.scss'],
-  providers: [
-    {
-      provide: NG_VALUE_ACCESSOR,
-      useExisting: forwardRef(() => ChartBarSettingsComponent),
-      multi: true
-    }
-  ]
+    selector: 'tb-chart-bar-settings',
+    templateUrl: './chart-bar-settings.component.html',
+    styleUrls: ['./../../widget-settings.scss'],
+    providers: [
+        {
+            provide: NG_VALUE_ACCESSOR,
+            useExisting: forwardRef(() => ChartBarSettingsComponent),
+            multi: true
+        }
+    ],
+    standalone: false
 })
 export class ChartBarSettingsComponent implements OnInit, ControlValueAccessor {
 
@@ -69,6 +58,10 @@ export class ChartBarSettingsComponent implements OnInit, ControlValueAccessor {
   @Input()
   @coerceBoolean()
   pieLabelPosition = false;
+
+  @Input()
+  @coerceBoolean()
+  reportMode = false;
 
   private modelValue: ChartBarSettings;
 
@@ -183,10 +176,10 @@ export class ChartBarSettingsComponent implements OnInit, ControlValueAccessor {
     if (this.series) {
       const dataKey = this.dataKeyConfigComponent.modelValue;
       const widgetConfig = this.dataKeyConfigComponent.widgetConfig;
-      const units = dataKey.units && dataKey.units.length ? dataKey.units : widgetConfig.config.units;
+      const units = isNotEmptyTbUnits(dataKey.units) ? dataKey.units : widgetConfig.config.units;
       const decimals = isDefinedAndNotNull(dataKey.decimals) ? dataKey.decimals :
         (isDefinedAndNotNull(widgetConfig.config.decimals) ? widgetConfig.config.decimals : 2);
-      return formatValue(22, decimals, units, false);
+      return formatValue(22, decimals, getSourceTbUnitSymbol(units), false);
     } else {
       return 'Wind';
     }

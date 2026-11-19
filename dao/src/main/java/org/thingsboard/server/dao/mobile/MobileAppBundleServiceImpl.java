@@ -1,20 +1,9 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.dao.mobile;
 
+import com.google.common.util.concurrent.FluentFuture;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -32,6 +21,7 @@ import org.thingsboard.server.common.data.oauth2.OAuth2ClientInfo;
 import org.thingsboard.server.common.data.oauth2.PlatformType;
 import org.thingsboard.server.common.data.page.PageData;
 import org.thingsboard.server.common.data.page.PageLink;
+import org.thingsboard.server.common.data.selfregistration.MobileSelfRegistrationParams;
 import org.thingsboard.server.dao.entity.AbstractEntityService;
 import org.thingsboard.server.dao.eventsourcing.DeleteEntityEvent;
 import org.thingsboard.server.dao.eventsourcing.SaveEntityEvent;
@@ -40,11 +30,11 @@ import org.thingsboard.server.dao.service.DataValidator;
 
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static org.thingsboard.server.dao.service.Validator.checkNotNull;
 
 @Slf4j
@@ -60,19 +50,18 @@ public class MobileAppBundleServiceImpl extends AbstractEntityService implements
     @Autowired
     private DataValidator<MobileAppBundle> mobileAppBundleDataValidator;
 
-
     @Override
     public MobileAppBundle saveMobileAppBundle(TenantId tenantId, MobileAppBundle mobileAppBundle) {
         log.trace("Executing saveMobileAppBundle [{}]", mobileAppBundle);
         mobileAppBundleDataValidator.validate(mobileAppBundle, b -> tenantId);
         try {
-            MobileAppBundle savedMobileApp = mobileAppBundleDao.save(tenantId, mobileAppBundle);
-            eventPublisher.publishEvent(SaveEntityEvent.builder().tenantId(tenantId).entity(savedMobileApp).build());
-            return savedMobileApp;
+            MobileAppBundle savedMobileAppBundle = mobileAppBundleDao.save(tenantId, mobileAppBundle);
+            eventPublisher.publishEvent(SaveEntityEvent.builder().tenantId(tenantId).entity(savedMobileAppBundle).build());
+            return savedMobileAppBundle;
         } catch (Exception e) {
             checkConstraintViolation(e,
-                    Map.of("mobile_app_bundle_android_app_id_key", "Android mobile app is already configured in another bundle!",
-                            "mobile_app_bundle_ios_app_id_key", "IOS mobile app is already configured in another bundle!"));
+                    "mobile_app_bundle_android_app_id_key", "Android mobile app is already configured in another bundle!",
+                    "mobile_app_bundle_ios_app_id_key", "IOS mobile app is already configured in another bundle!");
             throw e;
         }
     }
@@ -116,19 +105,56 @@ public class MobileAppBundleServiceImpl extends AbstractEntityService implements
 
     @Override
     public MobileAppBundleInfo findMobileAppBundleInfoById(TenantId tenantId, MobileAppBundleId mobileAppIdBundle) {
-        log.trace("Executing findMobileAppBundleInfoById [{}] [{}]", tenantId, mobileAppIdBundle);
-        MobileAppBundleInfo mobileAppBundleInfo = mobileAppBundleDao.findInfoById(tenantId, mobileAppIdBundle);
-        if (mobileAppBundleInfo != null) {
-            fetchOauth2Clients(mobileAppBundleInfo);
+        log.trace("Executing findMobileAppBundleFullInfoById [{}] [{}]", tenantId, mobileAppIdBundle);
+        MobileAppBundle mobileAppBundle = mobileAppBundleDao.findById(tenantId, mobileAppIdBundle.getId());
+        if (mobileAppBundle == null) {
+            return null;
         }
-        return mobileAppBundleInfo;
+        List<OAuth2ClientInfo> clients = oauth2ClientDao.findByMobileAppBundleId(mobileAppBundle.getUuidId()).stream()
+                .map(OAuth2ClientInfo::new)
+                .sorted(Comparator.comparing(OAuth2ClientInfo::getTitle))
+                .collect(Collectors.toList());
+        return new MobileAppBundleInfo(mobileAppBundle, clients);
     }
 
     @Override
-    public MobileAppBundle findMobileAppBundleByPkgNameAndPlatform(TenantId tenantId, String pkgName, PlatformType platform) {
-        log.trace("Executing findMobileAppBundleByPkgNameAndPlatform, tenantId [{}], pkgName [{}], platform [{}]", tenantId, pkgName, platform);
-        checkNotNull(platform, PLATFORM_TYPE_IS_REQUIRED);
-        return mobileAppBundleDao.findByPkgNameAndPlatform(tenantId, pkgName, platform);
+    public MobileAppBundle findMobileAppBundleByPkgNameAndPlatform(TenantId tenantId, String pkgName, PlatformType platformType, boolean fetchPolicyInfo) {
+        log.trace("Executing findMobileAppBundleByPkgNameAndPlatform, tenantId [{}], pkgName [{}], platform [{}]", tenantId, pkgName, platformType);
+        checkNotNull(platformType, PLATFORM_TYPE_IS_REQUIRED);
+        if (fetchPolicyInfo) {
+            return mobileAppBundleDao.findPolicyInfoByPkgNameAndPlatform(tenantId, pkgName, platformType);
+        } else {
+            return mobileAppBundleDao.findByPkgNameAndPlatform(tenantId, pkgName, platformType);
+        }
+    }
+
+    @Override
+    public MobileSelfRegistrationParams getMobileSelfRegistrationParams(TenantId tenantId, String pkgName, PlatformType platformType) {
+        log.trace("Executing findMobileSelfRegistrationSettings, tenantId [{}], pkgName [{}], platform [{}]", tenantId, pkgName, platformType);
+        MobileAppBundle appBundle = findMobileAppBundleByPkgNameAndPlatform(TenantId.SYS_TENANT_ID, pkgName, platformType, false);
+        return appBundle != null ? appBundle.getSelfRegistrationParams() : null;
+    }
+
+    @Override
+    public String getMobilePrivacyPolicy(TenantId tenantId, String pkgName, PlatformType platformType) {
+        log.trace("Executing findMobilePrivacyPolicy, tenantId [{}], pkgName [{}], platform [{}]", tenantId, pkgName, platformType);
+        checkNotNull(platformType, PLATFORM_TYPE_IS_REQUIRED);
+        MobileAppBundle appBundle = findMobileAppBundleByPkgNameAndPlatform(tenantId, pkgName, platformType, true);
+        if (appBundle != null && appBundle.getSelfRegistrationParams() != null) {
+            return appBundle.getSelfRegistrationParams().getPrivacyPolicy();
+        }
+        return null;
+    }
+
+    @Override
+    public String getMobileTermsOfUse(TenantId tenantId, String pkgName, PlatformType platformType) {
+        log.trace("Executing findMobileTermsOfUse, tenantId [{}], pkgName [{}], platform [{}]", tenantId, pkgName, platformType);
+        checkNotNull(platformType, PLATFORM_TYPE_IS_REQUIRED);
+        MobileAppBundle appBundle = findMobileAppBundleByPkgNameAndPlatform(tenantId, pkgName, platformType, true);
+        if (appBundle != null && appBundle.getSelfRegistrationParams() != null) {
+            return appBundle.getSelfRegistrationParams().getTermsOfUse();
+        }
+        return null;
     }
 
     @Override
@@ -150,6 +176,12 @@ public class MobileAppBundleServiceImpl extends AbstractEntityService implements
     }
 
     @Override
+    public FluentFuture<Optional<HasId<?>>> findEntityAsync(TenantId tenantId, EntityId entityId) {
+        return FluentFuture.from(mobileAppBundleDao.findByIdAsync(tenantId, entityId.getId()))
+                .transform(Optional::ofNullable, directExecutor());
+    }
+
+    @Override
     @Transactional
     public void deleteEntity(TenantId tenantId, EntityId id, boolean force) {
         deleteMobileAppBundleById(tenantId, (MobileAppBundleId) id);
@@ -167,4 +199,5 @@ public class MobileAppBundleServiceImpl extends AbstractEntityService implements
                 .collect(Collectors.toList());
         mobileAppBundleInfo.setOauth2ClientInfos(clients);
     }
+
 }

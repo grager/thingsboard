@@ -1,18 +1,6 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.service.sync.vc;
 
 import com.google.common.collect.Iterables;
@@ -41,7 +29,10 @@ import org.eclipse.jgit.diff.HistogramDiff;
 import org.eclipse.jgit.diff.RawText;
 import org.eclipse.jgit.diff.RawTextComparator;
 import org.eclipse.jgit.errors.LargeObjectException;
+import org.eclipse.jgit.errors.RepositoryNotFoundException;
+import org.eclipse.jgit.lib.Config;
 import org.eclipse.jgit.lib.Constants;
+import org.eclipse.jgit.lib.GpgConfig;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.ObjectLoader;
 import org.eclipse.jgit.lib.ObjectReader;
@@ -98,6 +89,7 @@ import static org.eclipse.jgit.transport.RemoteRefUpdate.Status.REJECTED_NODELET
 import static org.eclipse.jgit.transport.RemoteRefUpdate.Status.REJECTED_NONFASTFORWARD;
 import static org.eclipse.jgit.transport.RemoteRefUpdate.Status.REJECTED_OTHER_REASON;
 import static org.eclipse.jgit.transport.RemoteRefUpdate.Status.REJECTED_REMOTE_CHANGED;
+import static org.thingsboard.server.common.data.StringUtils.removeStart;
 
 @Slf4j
 public class GitRepository {
@@ -147,22 +139,31 @@ public class GitRepository {
     }
 
     public static GitRepository openOrClone(Path directory, RepositorySettings settings, boolean fetch) throws IOException, GitAPIException {
-        GitRepository repository;
         if (GitRepository.exists(directory.toString())) {
-            repository = GitRepository.open(directory.toFile(), settings);
-            if (fetch) {
-                repository.fetch();
-            }
-        } else {
-            FileUtils.deleteDirectory(directory.toFile());
-            Files.createDirectories(directory);
-            if (settings.isLocalOnly()) {
-                repository = GitRepository.create(settings, directory.toFile());
-            } else {
-                repository = GitRepository.clone(settings, directory.toFile());
+            try {
+                GitRepository repository = GitRepository.open(directory.toFile(), settings);
+                if (fetch) {
+                    repository.fetch();
+                }
+                return repository;
+            } catch (RepositoryNotFoundException e) {
+                log.warn("{} not a git repository, reinitializing", directory);
+            } catch (org.eclipse.jgit.errors.TransportException | org.eclipse.jgit.api.errors.TransportException e) {
+                if (StringUtils.containsIgnoreCase(e.getMessage(), "missing commit")) {
+                    log.warn("Couldn't fetch {} due to {}, reinitializing", directory, e.getMessage());
+                } else {
+                    throw e;
+                }
             }
         }
-        return repository;
+
+        FileUtils.deleteDirectory(directory.toFile());
+        Files.createDirectories(directory);
+        if (settings.isLocalOnly()) {
+            return GitRepository.create(settings, directory.toFile());
+        } else {
+            return GitRepository.clone(settings, directory.toFile());
+        }
     }
 
     public static void test(RepositorySettings settings, File directory) throws Exception {
@@ -224,7 +225,7 @@ public class GitRepository {
 
     public void merge(String branch) throws IOException, GitAPIException {
         log.debug("Executing merge [{}][{}]", settings.getRepositoryUri(), branch);
-        ObjectId branchId = resolve("origin/" + branch);
+        ObjectId branchId = tryResolve("origin/" + branch);
         if (branchId == null) {
             throw new IllegalArgumentException("Branch not found");
         }
@@ -247,7 +248,7 @@ public class GitRepository {
 
     public PageData<Commit> listCommits(String branch, String path, PageLink pageLink) throws IOException, GitAPIException {
         log.debug("Executing listCommits [{}][{}][{}]", settings.getRepositoryUri(), branch, path);
-        ObjectId branchId = resolve("origin/" + branch);
+        ObjectId branchId = tryResolve("origin/" + branch);
         if (branchId == null) {
             return new PageData<>();
         }
@@ -263,17 +264,26 @@ public class GitRepository {
         return iterableToPageData(commits, this::toCommit, pageLink, revCommitComparatorFunction);
     }
 
-    public List<String> listFilesAtCommit(String commitId, String path) {
+    public List<String> listAllFilesAtCommit(String commitId) {
+        return listAllFilesAtCommit(commitId, null);
+    }
+
+    public List<String> listAllFilesAtCommit(String commitId, String path) {
+        log.debug("Executing listAllFilesAtCommit [{}][{}][{}]", settings.getRepositoryUri(), commitId, path);
         return listFilesAtCommit(commitId, path, -1).stream().map(RepoFile::path).toList();
     }
 
-    @SneakyThrows
     public List<RepoFile> listFilesAtCommit(String commitId, String path, int depth) {
-        log.debug("Executing listFilesAtCommit [{}][{}][{}]", settings.getRepositoryUri(), commitId, path);
+        RevCommit commit = resolveCommit(commitId);
+        return listFilesAtCommit(commit, path, depth);
+    }
+
+    @SneakyThrows
+    public List<RepoFile> listFilesAtCommit(RevCommit commit, String path, int depth) {
+        log.debug("Executing listFilesAtCommit [{}][{}][{}]", settings.getRepositoryUri(), commit, path);
         List<RepoFile> files = new ArrayList<>();
-        RevCommit revCommit = resolveCommit(commitId);
         try (TreeWalk treeWalk = new TreeWalk(git.getRepository())) {
-            treeWalk.reset(revCommit.getTree().getId());
+            treeWalk.reset(commit.getTree().getId());
             if (StringUtils.isNotEmpty(path)) {
                 treeWalk.setFilter(PathFilter.create(path));
             }
@@ -291,13 +301,17 @@ public class GitRepository {
         return files;
     }
 
-    @SneakyThrows
     public byte[] getFileContentAtCommit(String file, String commitId) {
-        log.debug("Executing getFileContentAtCommit [{}][{}][{}]", settings.getRepositoryUri(), commitId, file);
-        RevCommit revCommit = resolveCommit(commitId);
-        try (TreeWalk treeWalk = TreeWalk.forPath(git.getRepository(), file, revCommit.getTree())) {
+        RevCommit commit = resolveCommit(commitId);
+        return getFileContentAtCommit(file, commit);
+    }
+
+    @SneakyThrows
+    public byte[] getFileContentAtCommit(String file, RevCommit commit) {
+        log.debug("Executing getFileContentAtCommit [{}][{}][{}]", settings.getRepositoryUri(), commit, file);
+        try (TreeWalk treeWalk = TreeWalk.forPath(git.getRepository(), file, commit.getTree())) {
             if (treeWalk == null) {
-                throw new IllegalArgumentException("File not found");
+                throw new IllegalArgumentException("File " + file + " not found");
             }
             ObjectId blobId = treeWalk.getObjectId(0);
             try (ObjectReader objectReader = git.getRepository().newObjectReader()) {
@@ -346,6 +360,8 @@ public class GitRepository {
     public Commit commit(String message, String authorName, String authorEmail) throws GitAPIException {
         log.debug("Executing commit [{}][{}]", settings.getRepositoryUri(), message);
         RevCommit revCommit = execute(git.commit()
+                .setSign(false)
+                .setGpgConfig(new GpgConfig(new Config()))
                 .setAuthor(authorName, authorEmail)
                 .setMessage(message));
         return toCommit(revCommit);
@@ -363,9 +379,9 @@ public class GitRepository {
             for (RemoteRefUpdate update : pushResult.getRemoteUpdates()) {
                 RemoteRefUpdate.Status status = update.getStatus();
                 if (status == REJECTED_NONFASTFORWARD || status == REJECTED_NODELETE ||
-                        status == REJECTED_REMOTE_CHANGED || status == REJECTED_OTHER_REASON) {
+                    status == REJECTED_REMOTE_CHANGED || status == REJECTED_OTHER_REASON) {
                     throw new RuntimeException("Remote repository answered with error: " +
-                            Optional.ofNullable(update.getMessage()).orElseGet(status::name));
+                                               Optional.ofNullable(update.getMessage()).orElseGet(status::name));
                 }
             }
         });
@@ -430,7 +446,7 @@ public class GitRepository {
 
     private BranchInfo toBranchInfo(Ref ref) {
         String name = org.eclipse.jgit.lib.Repository.shortenRefName(ref.getName());
-        String branchName = StringUtils.removeStart(name, "origin/");
+        String branchName = removeStart(name, "origin/");
         boolean isDefault = this.headId != null && this.headId.equals(ref.getObjectId());
         return new BranchInfo(branchName, isDefault);
     }
@@ -440,19 +456,24 @@ public class GitRepository {
                 revCommit.getFullMessage(), revCommit.getAuthorIdent().getName(), revCommit.getAuthorIdent().getEmailAddress());
     }
 
-    private RevCommit resolveCommit(String id) throws IOException {
+    @SneakyThrows
+    public RevCommit resolveCommit(String id) {
         return git.getRepository().parseCommit(resolve(id));
     }
 
     private ObjectId resolve(String rev) throws IOException {
-        if (settings.isLocalOnly()) {
-            rev = StringUtils.removeStart(rev, "origin/");
-        }
-        ObjectId result = git.getRepository().resolve(rev);
+        ObjectId result = tryResolve(rev);
         if (result == null) {
-            throw new IllegalArgumentException("Failed to parse git revision string: \"" + rev + "\"");
+            throw new IllegalArgumentException("Failed to resolve '" + rev + "'");
         }
         return result;
+    }
+
+    private ObjectId tryResolve(String rev) throws IOException {
+        if (settings.isLocalOnly()) {
+            rev = removeStart(rev, "origin/");
+        }
+        return git.getRepository().resolve(rev);
     }
 
     @SneakyThrows
@@ -471,8 +492,8 @@ public class GitRepository {
     private static final Function<PageLink, Comparator<RevCommit>> revCommitComparatorFunction = pageLink -> {
         SortOrder sortOrder = pageLink.getSortOrder();
         if (sortOrder != null
-                && sortOrder.getProperty().equals("timestamp")
-                && SortOrder.Direction.ASC.equals(sortOrder.getDirection())) {
+            && sortOrder.getProperty().equals("timestamp")
+            && SortOrder.Direction.ASC.equals(sortOrder.getDirection())) {
             return Comparator.comparingInt(RevCommit::getCommitTime);
         }
         return null;

@@ -1,19 +1,6 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import { AttributeScope } from '@shared/models/telemetry/telemetry.models';
 import { widgetType } from '@shared/models/widget.models';
 import { AlarmSeverity } from '@shared/models/alarm.models';
@@ -25,7 +12,8 @@ export enum GetValueAction {
   GET_ATTRIBUTE = 'GET_ATTRIBUTE',
   GET_TIME_SERIES = 'GET_TIME_SERIES',
   GET_ALARM_STATUS = 'GET_ALARM_STATUS',
-  GET_DASHBOARD_STATE = 'GET_DASHBOARD_STATE'
+  GET_DASHBOARD_STATE = 'GET_DASHBOARD_STATE',
+  GET_DASHBOARD_STATE_OBJECT = 'GET_DASHBOARD_STATE_OBJECT',
 }
 
 export const getValueActions = Object.keys(GetValueAction) as GetValueAction[];
@@ -45,7 +33,8 @@ export const getValueActionTranslations = new Map<GetValueAction, string>(
     [GetValueAction.GET_ATTRIBUTE, 'widgets.value-action.get-attribute'],
     [GetValueAction.GET_TIME_SERIES, 'widgets.value-action.get-time-series'],
     [GetValueAction.GET_ALARM_STATUS, 'widgets.value-action.get-alarm-status'],
-    [GetValueAction.GET_DASHBOARD_STATE, 'widgets.value-action.get-dashboard-state']
+    [GetValueAction.GET_DASHBOARD_STATE, 'widgets.value-action.get-dashboard-state'],
+    [GetValueAction.GET_DASHBOARD_STATE_OBJECT, 'widgets.value-action.get-dashboard-state-object'],
   ]
 );
 
@@ -54,6 +43,22 @@ export interface RpcSettings {
   requestTimeout: number;
   requestPersistent: boolean;
   persistentPollingInterval: number;
+}
+
+export enum RpcParamsType {
+  NONE = 'NONE',
+  CONSTANT = 'CONSTANT',
+  FUNCTION = 'FUNCTION'
+}
+
+export interface RpcParamsSettings {
+  type: RpcParamsType;
+  constantValue?: any;
+  paramsFunction?: TbFunction;
+}
+
+export interface GetValueRpcSettings extends RpcSettings {
+  params?: RpcParamsSettings;
 }
 
 export interface AlarmStatusSettings {
@@ -91,7 +96,7 @@ export interface ValueActionSettings {
 export interface GetValueSettings<V> extends ValueActionSettings {
   action: GetValueAction;
   defaultValue: V;
-  executeRpc?: RpcSettings;
+  executeRpc?: GetValueRpcSettings;
   getAttribute: GetAttributeValueSettings;
   getTimeSeries: TelemetryValueSettings;
   getAlarmStatus: AlarmStatusSettings;

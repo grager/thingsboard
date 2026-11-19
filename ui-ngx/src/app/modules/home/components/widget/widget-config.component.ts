@@ -1,19 +1,6 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import {
   ChangeDetectorRef,
   Component,
@@ -38,8 +25,12 @@ import {
   TargetDevice,
   targetDeviceValid,
   Widget,
+  widgetActionTypes,
   WidgetConfigMode,
-  widgetType
+  widgetTitleAutocompleteValues,
+  widgetType,
+  widgetTypeCanHaveTimewindow,
+  widgetTypeHasTimewindow
 } from '@shared/models/widget.models';
 import {
   AsyncValidator,
@@ -53,7 +44,7 @@ import {
   Validators
 } from '@angular/forms';
 import { WidgetConfigComponentData } from '@home/models/widget-component.models';
-import { deepClone, genNextLabel, isDefined, isObject } from '@app/core/utils';
+import { deepClone, genNextLabel, isDefined, isDefinedAndNotNull, isObject } from '@app/core/utils';
 import { alarmFields, AlarmSearchStatus } from '@shared/models/alarm.models';
 import { IAliasController } from '@core/api/widget-api.models';
 import { EntityAlias } from '@shared/models/alias.models';
@@ -80,28 +71,32 @@ import { FilterDialogComponent, FilterDialogData } from '@home/components/filter
 import { ToggleHeaderOption } from '@shared/components/toggle-header.component';
 import { coerceBoolean } from '@shared/decorators/coercion';
 import { TimewindowConfigData } from '@home/components/widget/config/timewindow-config-panel.component';
-import { DataKeySettingsFunction } from '@home/components/widget/config/data-keys.component.models';
+import { DataKeySettingsFunction } from '@home/components/widget/lib/settings/common/key/data-keys.component.models';
 import { defaultFormProperties, FormProperty } from '@shared/models/dynamic-form.models';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { WidgetService } from '@core/http/widget.service';
+import { TimeService } from '@core/services/time.service';
+import { initModelFromDefaultTimewindow } from '@shared/models/time/time.models';
+import { findWidgetModelDefinition } from '@shared/models/widget/widget-model.definition';
 import Timeout = NodeJS.Timeout;
 
 @Component({
-  selector: 'tb-widget-config',
-  templateUrl: './widget-config.component.html',
-  styleUrls: ['./widget-config.component.scss'],
-  providers: [
-    {
-      provide: NG_VALUE_ACCESSOR,
-      useExisting: forwardRef(() => WidgetConfigComponent),
-      multi: true
-    },
-    {
-      provide: NG_ASYNC_VALIDATORS,
-      useExisting: forwardRef(() => WidgetConfigComponent),
-      multi: true,
-    }
-  ]
+    selector: 'tb-widget-config',
+    templateUrl: './widget-config.component.html',
+    styleUrls: ['./widget-config.component.scss'],
+    providers: [
+        {
+            provide: NG_VALUE_ACCESSOR,
+            useExisting: forwardRef(() => WidgetConfigComponent),
+            multi: true
+        },
+        {
+            provide: NG_ASYNC_VALIDATORS,
+            useExisting: forwardRef(() => WidgetConfigComponent),
+            multi: true,
+        }
+    ],
+    standalone: false
 })
 export class WidgetConfigComponent extends PageComponent implements OnInit, OnDestroy, ControlValueAccessor, AsyncValidator {
 
@@ -154,6 +149,8 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, OnDe
 
   widgetType: widgetType;
 
+  widgetActionTypesList = widgetActionTypes;
+
   widgetConfigCallbacks: WidgetConfigCallbacks = {
     createEntityAlias: this.createEntityAlias.bind(this),
     editEntityAlias: this.editEntityAlias.bind(this),
@@ -162,7 +159,8 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, OnDe
     fetchEntityKeysForDevice: this.fetchEntityKeysForDevice.bind(this),
     fetchEntityKeys: this.fetchEntityKeys.bind(this),
     fetchDashboardStates: this.fetchDashboardStates.bind(this),
-    fetchCellClickColumns: this.fetchCellClickColumns.bind(this)
+    fetchCellClickColumns: this.fetchCellClickColumns.bind(this),
+    fetchEntityAliases: this.fetchEntityAliases.bind(this)
   };
 
   widgetEditMode = this.utils.widgetEditMode;
@@ -175,6 +173,9 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, OnDe
 
   headerOptions: ToggleHeaderOption[] = [];
   selectedOption: string;
+  predefinedValues = widgetTitleAutocompleteValues;
+
+  displayDataExport = true;
 
   public dataSettings: UntypedFormGroup;
   public targetDeviceSettings: UntypedFormGroup;
@@ -201,6 +202,7 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, OnDe
   constructor(protected store: Store<AppState>,
               private utils: UtilsService,
               private entityService: EntityService,
+              public timeService: TimeService,
               private dialog: MatDialog,
               public translate: TranslateService,
               private fb: UntypedFormBuilder,
@@ -226,6 +228,7 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, OnDe
       showTitle: [null, []],
       dropShadow: [null, []],
       enableFullscreen: [null, []],
+      enableDataExport: [null, []],
       backgroundColor: [null, []],
       color: [null, []],
       padding: [null, []],
@@ -323,7 +326,7 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, OnDe
 
   private buildHeader() {
     this.headerOptions.length = 0;
-    if (this.widgetType !== widgetType.static) {
+    if (this.displayData) {
       this.headerOptions.push(
         {
           name: this.translate.instant('widget-config.data'),
@@ -366,16 +369,16 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, OnDe
     this.dataSettings = this.fb.group({});
     this.targetDeviceSettings = this.fb.group({});
     this.advancedSettings = this.fb.group({});
-    if (this.widgetType === widgetType.timeseries || this.widgetType === widgetType.alarm || this.widgetType === widgetType.latest) {
+    if (widgetTypeCanHaveTimewindow(this.widgetType)) {
       this.dataSettings.addControl('timewindowConfig', this.fb.control({
         useDashboardTimewindow: true,
         displayTimewindow: true,
         timewindow: null,
         timewindowStyle: null
       }));
-      if (this.widgetType === widgetType.alarm) {
-        this.dataSettings.addControl('alarmFilterConfig', this.fb.control(null));
-      }
+    }
+    if (this.widgetType === widgetType.alarm) {
+      this.dataSettings.addControl('alarmFilterConfig', this.fb.control(null));
     }
     if (this.modelValue.isDataEnabled) {
       if (this.widgetType !== widgetType.rpc &&
@@ -385,8 +388,11 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, OnDe
       } else if (this.widgetType === widgetType.rpc) {
         this.targetDeviceSettings.addControl('targetDevice',
           this.fb.control(null, []));
+        this.displayDataExport = false;
       } else if (this.widgetType === widgetType.alarm) {
         this.dataSettings.addControl('alarmSource', this.fb.control(null));
+      } else if (this.widgetType === widgetType.static) {
+        this.displayDataExport = false;
       }
     }
     this.advancedSettings.addControl('settings',
@@ -504,6 +510,7 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, OnDe
           showTitle: displayWidgetTitle,
           dropShadow: isDefined(config.dropShadow) ? config.dropShadow : true,
           enableFullscreen: isDefined(config.enableFullscreen) ? config.enableFullscreen : true,
+          enableDataExport: isDefined(config.enableDataExport) ? config.enableDataExport : true,
           backgroundColor: config.backgroundColor,
           color: config.color,
           padding: config.padding,
@@ -529,14 +536,17 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, OnDe
         },
         {emitEvent: false}
       );
-      if (this.widgetType === widgetType.timeseries || this.widgetType === widgetType.alarm || this.widgetType === widgetType.latest) {
+      if (widgetTypeCanHaveTimewindow(this.widgetType)) {
         const useDashboardTimewindow = isDefined(config.useDashboardTimewindow) ?
           config.useDashboardTimewindow : true;
         this.dataSettings.get('timewindowConfig').patchValue({
           useDashboardTimewindow,
           displayTimewindow: isDefined(config.displayTimewindow) ?
             config.displayTimewindow : true,
-          timewindow: config.timewindow,
+          timewindow: isDefinedAndNotNull(config.timewindow)
+            ? config.timewindow
+            : initModelFromDefaultTimewindow(null, this.widgetType === widgetType.latest, this.onlyHistoryTimewindow(),
+              this.timeService, this.widgetType === widgetType.timeseries),
           timewindowStyle: config.timewindowStyle
         }, {emitEvent: false});
       }
@@ -711,6 +721,10 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, OnDe
     return this.modelValue?.basicModeDirective?.length && !this.basicModeDirectiveError;
   }
 
+  public get displayData(): boolean {
+    return !this.modelValue?.typeParameters?.hideDataTab && this.widgetType !== widgetType.static;
+  }
+
   public get displayAppearance(): boolean {
     return this.displayAppearanceDataSettings || this.displayAdvancedAppearance;
   }
@@ -721,11 +735,16 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, OnDe
   }
 
   public get displayTimewindowConfig(): boolean {
-    if (this.widgetType === widgetType.timeseries || this.widgetType === widgetType.alarm) {
+    if (widgetTypeHasTimewindow(this.widgetType)) {
       return true;
     } else if (this.widgetType === widgetType.latest) {
-      const datasources = this.dataSettings.get('datasources').value;
-      return datasourcesHasAggregation(datasources);
+      const widgetDefinition = findWidgetModelDefinition(this.widget);
+      if (widgetDefinition) {
+        return widgetDefinition.datasourcesHasAggregation(this.widget);
+      } else {
+        const datasources = this.dataSettings.get('datasources').value;
+        return datasourcesHasAggregation(datasources);
+      }
     }
   }
 
@@ -748,8 +767,13 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, OnDe
 
   public onlyHistoryTimewindow(): boolean {
     if (this.widgetType === widgetType.latest) {
-      const datasources = this.dataSettings.get('datasources').value;
-      return datasourcesHasOnlyComparisonAggregation(datasources);
+      const widgetDefinition = findWidgetModelDefinition(this.widget);
+      if (widgetDefinition) {
+        return widgetDefinition.datasourcesHasOnlyComparisonAggregation(this.widget);
+      } else {
+        const datasources = this.dataSettings.get('datasources').value;
+        return datasourcesHasOnlyComparisonAggregation(datasources);
+      }
     } else {
       return false;
     }
@@ -758,7 +782,6 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, OnDe
   public generateDataKey(chip: any, type: DataKeyType, dataKeySettingsForm: FormProperty[],
                          isLatestDataKey: boolean, dataKeySettingsFunction: DataKeySettingsFunction): DataKey {
     if (isObject(chip)) {
-      (chip as DataKey)._hash = Math.random();
       return chip;
     } else {
       let label: string = chip;
@@ -776,7 +799,6 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, OnDe
         label,
         color: this.genNextColor(),
         settings: {},
-        _hash: Math.random()
       };
       if (type === DataKeyType.function) {
         result.name = 'f(x)';
@@ -811,6 +833,10 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, OnDe
       });
     }
     return this.utils.getMaterialColor(i);
+  }
+
+  private fetchEntityAliases(): Array<EntityAlias> {
+    return this.aliasController ? Object.values(this.aliasController.getEntityAliases()) : [];
   }
 
   private createEntityAlias(alias: string, allowedEntityTypes: Array<EntityType>): Observable<EntityAlias> {
@@ -914,8 +940,27 @@ export class WidgetConfigComponent extends PageComponent implements OnInit, OnDe
   private fetchCellClickColumns(): Array<CellClickColumnInfo> {
     if (this.modelValue) {
       const configuredColumns = new Array<CellClickColumnInfo>();
-      if (this.modelValue.config?.datasources[0]?.dataKeys?.length) {
-        configuredColumns.push(...this.keysToCellClickColumns(this.modelValue.config.datasources[0].dataKeys));
+      if (this.modelValue.config?.datasources?.[0]?.dataKeys?.length) {
+        const {
+          displayEntityLabel,
+          displayEntityName,
+          displayEntityType,
+          entityNameColumnTitle,
+          entityLabelColumnTitle
+        } = this.modelValue.config.settings;
+        const displayEntitiesArray = [];
+        if (displayEntityName) {
+          const displayName = entityNameColumnTitle ? entityNameColumnTitle : 'entityName';
+          displayEntitiesArray.push({name: displayName, label: displayName});
+        }
+        if (displayEntityLabel) {
+          const displayLabel = entityLabelColumnTitle ? entityLabelColumnTitle : 'entityLabel';
+          displayEntitiesArray.push({name: displayLabel, label: displayLabel});
+        }
+        if (displayEntityType) {
+          displayEntitiesArray.push({name: 'entityType', label: 'entityType'});
+        }
+        configuredColumns.push(...displayEntitiesArray, ...this.keysToCellClickColumns(this.modelValue.config.datasources[0].dataKeys));
       }
       if (this.modelValue.config?.alarmSource?.dataKeys?.length) {
         configuredColumns.push(...this.keysToCellClickColumns(this.modelValue.config.alarmSource.dataKeys));

@@ -1,20 +1,9 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.dao.widget;
 
+import com.google.common.util.concurrent.FluentFuture;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.CollectionUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -47,6 +36,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static org.thingsboard.server.dao.service.Validator.validateIds;
 
 @Service("WidgetTypeDaoService")
@@ -54,8 +44,6 @@ import static org.thingsboard.server.dao.service.Validator.validateIds;
 public class WidgetTypeServiceImpl implements WidgetTypeService {
 
     public static final String INCORRECT_TENANT_ID = "Incorrect tenantId ";
-    public static final String INCORRECT_RESOURCE_ID = "Incorrect resourceId ";
-    public static final String INCORRECT_BUNDLE_ALIAS = "Incorrect bundleAlias ";
     public static final String INCORRECT_WIDGETS_BUNDLE_ID = "Incorrect widgetsBundleId ";
 
     @Autowired
@@ -88,6 +76,13 @@ public class WidgetTypeServiceImpl implements WidgetTypeService {
     }
 
     @Override
+    public WidgetTypeInfo findWidgetTypeInfoById(TenantId tenantId, WidgetTypeId widgetTypeId) {
+        log.trace("Executing findWidgetTypeInfoById [{}]", widgetTypeId);
+        Validator.validateId(widgetTypeId, id -> "Incorrect widgetTypeId " + id);
+        return widgetTypeDao.findWidgetTypeInfoById(tenantId, widgetTypeId.getId());
+    }
+
+    @Override
     public boolean widgetTypeExistsByTenantIdAndWidgetTypeId(TenantId tenantId, WidgetTypeId widgetTypeId) {
         log.trace("Executing widgetTypeExistsByTenantIdAndWidgetTypeId, tenantId [{}],  widgetTypeId [{}]", tenantId, widgetTypeId);
         Validator.validateId(widgetTypeId, id -> "Incorrect widgetTypeId " + id);
@@ -101,7 +96,7 @@ public class WidgetTypeServiceImpl implements WidgetTypeService {
         try {
             TenantId tenantId = widgetTypeDetails.getTenantId();
             if (CollectionUtils.isNotEmpty(widgetTypeDetails.getResources())) {
-                resourceService.importResources(tenantId, widgetTypeDetails.getResources());
+                resourceService.importResources(tenantId, null, widgetTypeDetails.getResources());
             }
             imageService.updateImagesUsage(widgetTypeDetails);
             resourceService.updateResourcesUsage(tenantId, widgetTypeDetails);
@@ -275,6 +270,12 @@ public class WidgetTypeServiceImpl implements WidgetTypeService {
     }
 
     @Override
+    public FluentFuture<Optional<HasId<?>>> findEntityAsync(TenantId tenantId, EntityId entityId) {
+        return FluentFuture.from(widgetTypeDao.findByIdAsync(tenantId, entityId.getId()))
+                .transform(Optional::ofNullable, directExecutor());
+    }
+
+    @Override
     public EntityType getEntityType() {
         return EntityType.WIDGET_TYPE;
     }
@@ -296,6 +297,7 @@ public class WidgetTypeServiceImpl implements WidgetTypeService {
         protected void removeEntity(TenantId tenantId, WidgetTypeInfo entity) {
             deleteWidgetType(tenantId, new WidgetTypeId(entity.getUuidId()));
         }
+
     };
 
     private final PaginatedRemover<WidgetsBundleId, WidgetTypeInfo> bundleWidgetTypesRemover = new PaginatedRemover<>() {
@@ -309,6 +311,7 @@ public class WidgetTypeServiceImpl implements WidgetTypeService {
         protected void removeEntity(TenantId tenantId, WidgetTypeInfo widgetTypeInfo) {
             deleteWidgetType(tenantId, widgetTypeInfo.getId());
         }
+
     };
 
 }

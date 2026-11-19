@@ -1,40 +1,11 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
-
-///
-/// Copyright © 2016-2023 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import {
   AfterViewInit,
   ChangeDetectorRef,
   Component,
+  DestroyRef,
   ElementRef,
   Input,
   OnDestroy,
@@ -44,19 +15,21 @@ import {
   ViewChild,
   ViewEncapsulation
 } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { WidgetContext } from '@home/models/widget-component.models';
 import {
   backgroundStyle,
   ColorProcessor,
   ComponentStyle,
+  createValueFormatterFromSettings,
   DateFormatProcessor,
-  getDataKey,
   getSingleTsValue,
   overlayStyle,
-  textStyle
+  textStyle,
+  ValueFormatProcessor
 } from '@shared/models/widget-settings.models';
 import { WidgetComponent } from '@home/components/widget/widget.component';
-import { formatValue, isDefinedAndNotNull, isNumeric, isUndefinedOrNull } from '@core/utils';
+import { isNumeric, isUndefinedOrNull } from '@core/utils';
 import { Element, G, Svg, SVG } from '@svgdotjs/svg.js';
 import {
   signalBarActive,
@@ -75,10 +48,11 @@ const shapeHeight = 113;
 const shapeAspect = shapeWidth / shapeHeight;
 
 @Component({
-  selector: 'tb-signal-strength-widget',
-  templateUrl: './signal-strength-widget.component.html',
-  styleUrls: ['./signal-strength-widget.component.scss'],
-  encapsulation: ViewEncapsulation.None
+    selector: 'tb-signal-strength-widget',
+    templateUrl: './signal-strength-widget.component.html',
+    styleUrls: ['./signal-strength-widget.component.scss'],
+    encapsulation: ViewEncapsulation.None,
+    standalone: false
 })
 export class SignalStrengthWidgetComponent implements OnInit, OnDestroy, AfterViewInit {
 
@@ -130,8 +104,7 @@ export class SignalStrengthWidgetComponent implements OnInit, OnDestroy, AfterVi
 
   hasCardClickAction = false;
 
-  private decimals = 0;
-  private units = '';
+  private valueFormat: ValueFormatProcessor;
 
   private drawSvgShapePending = false;
   private svgShape: Svg;
@@ -152,7 +125,8 @@ export class SignalStrengthWidgetComponent implements OnInit, OnDestroy, AfterVi
               private sanitizer: DomSanitizer,
               private translate: TranslateService,
               private renderer: Renderer2,
-              private cd: ChangeDetectorRef) {
+              private cd: ChangeDetectorRef,
+              private destroyRef: DestroyRef) {
   }
 
   ngOnInit(): void {
@@ -165,6 +139,9 @@ export class SignalStrengthWidgetComponent implements OnInit, OnDestroy, AfterVi
       this.dateFormat = DateFormatProcessor.fromSettings(this.ctx.$injector, this.settings.dateFormat);
       this.dateStyle = textStyle(this.settings.dateFont);
       this.dateStyle.color = this.settings.dateColor;
+      this.dateFormat.formattedUpdated?.pipe(
+        takeUntilDestroyed(this.destroyRef)
+      ).subscribe(() => this.cd.detectChanges());
     }
 
     this.noSignalRssiValue = this.settings.noSignalRssiValue ?? -100;
@@ -188,15 +165,7 @@ export class SignalStrengthWidgetComponent implements OnInit, OnDestroy, AfterVi
     this.showTooltipDate = this.showTooltip && this.settings.showTooltipDate;
 
     if (this.showTooltipValue) {
-      this.decimals = this.ctx.decimals;
-      this.units = this.ctx.units;
-      const dataKey = getDataKey(this.ctx.datasources);
-      if (isDefinedAndNotNull(dataKey?.decimals)) {
-        this.decimals = dataKey.decimals;
-      }
-      if (dataKey?.units) {
-        this.units = dataKey.units;
-      }
+      this.valueFormat = createValueFormatterFromSettings(this.ctx);
       this.tooltipValueStyle = textStyle(this.settings.tooltipValueFont);
       this.tooltipValueStyle.color = this.settings.tooltipValueColor;
       this.tooltipValueLabelStyle = {...this.tooltipValueStyle, ...this.tooltipValueLabelStyle};
@@ -208,6 +177,9 @@ export class SignalStrengthWidgetComponent implements OnInit, OnDestroy, AfterVi
       this.tooltipDateStyle = textStyle(this.settings.tooltipDateFont);
       this.tooltipDateStyle.color = this.settings.tooltipDateColor;
       this.tooltipDateLabelStyle = {...this.tooltipDateStyle, ...this.tooltipDateLabelStyle};
+      this.tooltipDateFormat.formattedUpdated?.pipe(
+        takeUntilDestroyed(this.destroyRef)
+      ).subscribe(() => this.cd.detectChanges());
     }
 
     this.backgroundStyle$ = backgroundStyle(this.settings.background, this.imagePipe, this.sanitizer);
@@ -257,7 +229,7 @@ export class SignalStrengthWidgetComponent implements OnInit, OnDestroy, AfterVi
     if (!this.noData) {
       this.rssi = Number(value);
       if (this.showTooltipValue) {
-        this.tooltipValueText = formatValue(value, this.decimals, this.units, false);
+        this.tooltipValueText = this.valueFormat.format(value);
       }
     } else {
       this.rssi = this.noSignalRssiValue;

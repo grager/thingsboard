@@ -1,19 +1,5 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-License-Identifier: Apache-2.0
 import _ from 'lodash';
 import tinycolor from 'tinycolor2';
 
@@ -31,7 +17,7 @@ import {
   defaultTripAnimationSettings,
   MapProviders,
   WidgetUnitedTripAnimationSettings
-} from '@home/components/widget/lib/maps/map-models';
+} from '@home/components/widget/lib/maps-legacy/map-models';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { WidgetContext } from '@app/modules/home/models/widget-component.models';
 import {
@@ -39,7 +25,7 @@ import {
   getRatio,
   interpolateOnLineSegment,
   parseWithTranslation
-} from '@home/components/widget/lib/maps/common-maps-utils';
+} from '@home/components/widget/lib/maps-legacy/common-maps-utils';
 import { FormattedData, WidgetConfig } from '@shared/models/widget.models';
 import moment from 'moment';
 import {
@@ -51,7 +37,7 @@ import {
   parseTbFunction,
   safeExecuteTbFunction
 } from '@core/utils';
-import { MapWidgetInterface } from '@home/components/widget/lib/maps/map-widget.interface';
+import { MapWidgetInterface } from '@home/components/widget/lib/maps-legacy/map-widget.interface';
 import { firstValueFrom, from } from 'rxjs';
 
 interface DataMap {
@@ -59,10 +45,11 @@ interface DataMap {
 }
 
 @Component({
-  // eslint-disable-next-line @angular-eslint/component-selector
-  selector: 'trip-animation',
-  templateUrl: './trip-animation.component.html',
-  styleUrls: ['./trip-animation.component.scss']
+    // eslint-disable-next-line @angular-eslint/component-selector
+    selector: 'trip-animation',
+    templateUrl: './trip-animation.component.html',
+    styleUrls: ['./trip-animation.component.scss'],
+    standalone: false
 })
 export class TripAnimationComponent implements OnInit, AfterViewInit, OnDestroy {
 
@@ -123,7 +110,7 @@ export class TripAnimationComponent implements OnInit, AfterViewInit, OnDestroy 
   }
 
   ngAfterViewInit() {
-    import('@home/components/widget/lib/maps/map-widget2').then(
+    import('@home/components/widget/lib/maps-legacy/map-widget2').then(
       (mod) => {
         this.mapWidget = new mod.MapWidgetController(MapProviders.openstreet, false, this.ctx, this.mapContainer.nativeElement, false,
           () => {
@@ -378,4 +365,4 @@ export class TripAnimationComponent implements OnInit, AfterViewInit, OnDestroy 
   }
 }
 
-export let TbTripAnimationWidget = TripAnimationComponent;
+export const TbTripAnimationWidget = TripAnimationComponent;

@@ -1,20 +1,9 @@
-/**
- * Copyright © 2016-2024 The Thingsboard Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 package org.thingsboard.server.service.edge.rpc.processor.alarm;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import lombok.extern.slf4j.Slf4j;
@@ -24,15 +13,23 @@ import org.thingsboard.server.common.data.alarm.Alarm;
 import org.thingsboard.server.common.data.alarm.AlarmComment;
 import org.thingsboard.server.common.data.alarm.AlarmCreateOrUpdateActiveRequest;
 import org.thingsboard.server.common.data.alarm.AlarmUpdateRequest;
+import org.thingsboard.server.common.data.edge.EdgeEventActionType;
+import org.thingsboard.server.common.data.edge.EdgeEventType;
 import org.thingsboard.server.common.data.id.AlarmId;
+import org.thingsboard.server.common.data.id.EdgeId;
 import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.TenantId;
+import org.thingsboard.server.common.data.page.PageDataIterableByTenantIdEntityId;
 import org.thingsboard.server.dao.alarm.AlarmCommentDao;
 import org.thingsboard.server.gen.edge.v1.AlarmCommentUpdateMsg;
 import org.thingsboard.server.gen.edge.v1.AlarmUpdateMsg;
 import org.thingsboard.server.service.edge.rpc.processor.BaseEdgeProcessor;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
+
+import static org.thingsboard.server.dao.edge.BaseRelatedEdgesService.RELATED_EDGES_CACHE_ITEMS;
 
 @Slf4j
 public abstract class BaseAlarmProcessor extends BaseEdgeProcessor {
@@ -43,16 +40,17 @@ public abstract class BaseAlarmProcessor extends BaseEdgeProcessor {
     public ListenableFuture<Void> processAlarmMsg(TenantId tenantId, AlarmUpdateMsg alarmUpdateMsg) {
         log.trace("[{}] processAlarmMsg [{}]", tenantId, alarmUpdateMsg);
         AlarmId alarmId = new AlarmId(new UUID(alarmUpdateMsg.getIdMSB(), alarmUpdateMsg.getIdLSB()));
-        EntityId originatorId = getAlarmOriginatorFromMsg(tenantId, alarmUpdateMsg);
-        Alarm alarm = constructAlarmFromUpdateMsg(tenantId, alarmId, originatorId, alarmUpdateMsg);
+        Alarm alarm = JacksonUtil.fromString(alarmUpdateMsg.getEntity(), Alarm.class, true);
         if (alarm == null) {
             throw new RuntimeException("[{" + tenantId + "}] alarmUpdateMsg {" + alarmUpdateMsg + "} cannot be converted to alarm");
         }
-        if (alarm.getOriginator() == null) {
+        if (alarm.getOriginator() == null || !isTenantEntity(tenantId, alarm.getOriginator())) {
             log.warn("[{}] Originator not found for the alarm msg {}", tenantId, alarmUpdateMsg);
             return Futures.immediateFuture(null);
         }
+        alarm.setTenantId(tenantId);
         try {
+            findTenantEntity(tenantId, alarmId);
             switch (alarmUpdateMsg.getMsgType()) {
                 case ENTITY_CREATED_RPC_MESSAGE:
                     edgeCtx.getAlarmService().createAlarm(AlarmCreateOrUpdateActiveRequest.fromAlarm(alarm, null, alarmId));
@@ -61,22 +59,13 @@ public abstract class BaseAlarmProcessor extends BaseEdgeProcessor {
                     edgeCtx.getAlarmService().updateAlarm(AlarmUpdateRequest.fromAlarm(alarm));
                     break;
                 case ALARM_ACK_RPC_MESSAGE:
-                    Alarm alarmToAck = edgeCtx.getAlarmService().findAlarmById(tenantId, alarmId);
-                    if (alarmToAck != null) {
-                        edgeCtx.getAlarmService().acknowledgeAlarm(tenantId, alarmId, alarm.getAckTs());
-                    }
+                    edgeCtx.getAlarmService().acknowledgeAlarm(tenantId, alarm.getOriginator(), alarmId, alarm.getAckTs());
                     break;
                 case ALARM_CLEAR_RPC_MESSAGE:
-                    Alarm alarmToClear = edgeCtx.getAlarmService().findAlarmById(tenantId, alarmId);
-                    if (alarmToClear != null) {
-                        edgeCtx.getAlarmService().clearAlarm(tenantId, alarmId, alarm.getClearTs(), alarm.getDetails());
-                    }
+                    edgeCtx.getAlarmService().clearAlarm(tenantId, alarm.getOriginator(), alarmId, alarm.getClearTs(), alarm.getDetails(), true);
                     break;
                 case ENTITY_DELETED_RPC_MESSAGE:
-                    Alarm alarmToDelete = edgeCtx.getAlarmService().findAlarmById(tenantId, alarmId);
-                    if (alarmToDelete != null) {
-                        edgeCtx.getAlarmService().delAlarm(tenantId, alarmId);
-                    }
+                    edgeCtx.getAlarmService().delAlarm(tenantId, alarm.getOriginator(), alarmId);
                     break;
                 case UNRECOGNIZED:
                 default:
@@ -97,8 +86,14 @@ public abstract class BaseAlarmProcessor extends BaseEdgeProcessor {
         }
         try {
             Alarm alarm = edgeCtx.getAlarmService().findAlarmById(tenantId, new AlarmId(alarmComment.getAlarmId().getId()));
-            if (alarm == null) {
+            if (alarm == null || !tenantId.equals(alarm.getTenantId())) {
                 return Futures.immediateFuture(null);
+            }
+            if (alarmComment.getId() != null) {
+                AlarmComment alarmCommentById = edgeCtx.getAlarmCommentService().findAlarmCommentById(tenantId, alarmComment.getId());
+                if (alarmCommentById != null && !alarm.getId().equals(alarmCommentById.getAlarmId())) {
+                    return Futures.immediateFuture(null);
+                }
             }
             switch (alarmCommentUpdateMsg.getMsgType()) {
                 case ENTITY_CREATED_RPC_MESSAGE:
@@ -124,9 +119,18 @@ public abstract class BaseAlarmProcessor extends BaseEdgeProcessor {
         return Futures.immediateFuture(null);
     }
 
-
-    protected abstract EntityId getAlarmOriginatorFromMsg(TenantId tenantId, AlarmUpdateMsg alarmUpdateMsg);
-
-    protected abstract Alarm constructAlarmFromUpdateMsg(TenantId tenantId, AlarmId alarmId, EntityId originatorId, AlarmUpdateMsg alarmUpdateMsg);
+    protected List<ListenableFuture<Void>> pushEventToAllRelatedEdges(TenantId tenantId, EntityId originatorId, AlarmId alarmId,
+                                                                      EdgeEventActionType actionType, JsonNode body, EdgeId sourceEdgeId,
+                                                                      EdgeEventType edgeEventType) {
+        List<ListenableFuture<Void>> futures = new ArrayList<>();
+        PageDataIterableByTenantIdEntityId<EdgeId> edgeIds =
+                new PageDataIterableByTenantIdEntityId<>(edgeCtx.getEdgeService()::findRelatedEdgeIdsByEntityId, tenantId, originatorId, RELATED_EDGES_CACHE_ITEMS);
+        for (EdgeId relatedEdgeId : edgeIds) {
+            if (!relatedEdgeId.equals(sourceEdgeId)) {
+                futures.add(saveEdgeEvent(tenantId, relatedEdgeId, edgeEventType, actionType, alarmId, body));
+            }
+        }
+        return futures;
+    }
 
 }

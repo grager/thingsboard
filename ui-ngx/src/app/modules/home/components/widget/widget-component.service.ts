@@ -1,25 +1,12 @@
-///
-/// Copyright © 2016-2024 The Thingsboard Authors
-///
-/// Licensed under the Apache License, Version 2.0 (the "License");
-/// you may not use this file except in compliance with the License.
-/// You may obtain a copy of the License at
-///
-///     http://www.apache.org/licenses/LICENSE-2.0
-///
-/// Unless required by applicable law or agreed to in writing, software
-/// distributed under the License is distributed on an "AS IS" BASIS,
-/// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-/// See the License for the specific language governing permissions and
-/// limitations under the License.
-///
-
+// SPDX-FileCopyrightText: Copyright The ThingsBoard Authors
+// SPDX-FileCopyrightText: Modifications Copyright ThingsBoard, Inc.
+// SPDX-License-Identifier: Apache-2.0 AND BUSL-1.1
 import { Inject, Injectable, Optional, Type } from '@angular/core';
 import { DynamicComponentFactoryService } from '@core/services/dynamic-component-factory.service';
 import { WidgetService } from '@core/http/widget.service';
 import { forkJoin, from, Observable, of, ReplaySubject, Subject, throwError } from 'rxjs';
 import {
-  ErrorWidgetType,
+  ErrorWidgetType, isWidgetWithInfo,
   MissingWidgetType,
   toWidgetInfo,
   toWidgetType,
@@ -40,11 +27,12 @@ import {
   migrateWidgetTypeToDynamicForms,
   Widget,
   widgetActionSources,
+  WidgetActionType,
   WidgetControllerDescriptor,
   WidgetType
 } from '@shared/models/widget.models';
 import { catchError, map, mergeMap, switchMap, tap } from 'rxjs/operators';
-import { isFunction, isUndefined } from '@core/utils';
+import { isDefinedAndNotNull, isFunction, isUndefined } from '@core/utils';
 import { TranslateService } from '@ngx-translate/core';
 import { DynamicWidgetComponent } from '@home/components/widget/dynamic-widget.component';
 import { WidgetComponentsModule } from '@home/components/widget/widget-components.module';
@@ -59,6 +47,7 @@ import tinycolor from 'tinycolor2';
 import moment from 'moment';
 import { IModulesMap } from '@modules/common/modules-map.models';
 import { HOME_COMPONENTS_MODULE_TOKEN } from '@home/components/tokens';
+import { DashboardReportService } from '@core/http/dashboard-report.service';
 import { IBasicWidgetConfigComponent } from '@home/components/widget/config/widget-config.component.models';
 import { compileTbFunction, TbFunction } from '@shared/models/js-function.models';
 import { HttpClient } from '@angular/common/http';
@@ -85,7 +74,8 @@ export class WidgetComponentService {
               private utils: UtilsService,
               private resources: ResourcesService,
               private translate: TranslateService,
-              private http: HttpClient) {
+              private http: HttpClient,
+              private reportService: DashboardReportService) {
 
     this.cssParser.testMode = false;
 
@@ -185,7 +175,7 @@ export class WidgetComponentService {
           (window as any).TbCanvasDigitalGauge = mod.TbCanvasDigitalGauge;
         }))
       );
-      widgetModulesTasks.push(from(import('@home/components/widget/lib/maps/map-widget2')).pipe(
+      widgetModulesTasks.push(from(import('@home/components/widget/lib/maps-legacy/map-widget2')).pipe(
         tap((mod) => {
           (window as any).TbMapWidgetV2 = mod.TbMapWidgetV2;
         }))
@@ -206,6 +196,9 @@ export class WidgetComponentService {
           ];
           forkJoin(loadDefaultWidgetInfoTasks).subscribe(
             () => {
+              if (this.reportService.reportView) {
+                this.reportService.openReportSubject.subscribe(() => this.widgetService.clearWidgetInfoInMemoryCache());
+              }
               initSubject.next();
             },
             (e) => {
@@ -238,11 +231,18 @@ export class WidgetComponentService {
   }
 
   public getInstantWidgetInfo(widget: Widget): WidgetInfo {
+    if (isWidgetWithInfo(widget)) {
+      return widget.widgetInfo;
+    }
     const widgetInfo = this.widgetService.getWidgetInfoFromCache(widget.typeFullFqn);
     if (widgetInfo) {
       return widgetInfo;
     } else {
-      return {} as WidgetInfo;
+      return {
+        typeParameters: {
+          hideDataTab: true
+        }
+      } as WidgetInfo;
     }
   }
 
@@ -630,8 +630,14 @@ export class WidgetComponentService {
         if (isUndefined(result.typeParameters.embedTitlePanel)) {
           result.typeParameters.embedTitlePanel = false;
         }
+        if (isUndefined(result.typeParameters.embedActionsPanel)) {
+          result.typeParameters.embedActionsPanel = false;
+        }
         if (isUndefined(result.typeParameters.overflowVisible)) {
           result.typeParameters.overflowVisible = false;
+        }
+        if (isUndefined(result.typeParameters.hideDataTab)) {
+          result.typeParameters.hideDataTab = false;
         }
         if (isUndefined(result.typeParameters.hideDataSettings)) {
           result.typeParameters.hideDataSettings = false;
@@ -650,6 +656,16 @@ export class WidgetComponentService {
         }
         if (isUndefined(result.typeParameters.targetDeviceOptional)) {
           result.typeParameters.targetDeviceOptional = false;
+        }
+        if (isUndefined(result.typeParameters.supportsUnitConversion)) {
+          result.typeParameters.supportsUnitConversion = false;
+        }
+        if (isDefinedAndNotNull(result.typeParameters.additionalWidgetActionTypes)) {
+          if (Array.isArray(result.typeParameters.additionalWidgetActionTypes)) {
+            result.typeParameters.additionalWidgetActionTypes = result.typeParameters.additionalWidgetActionTypes.filter(type => WidgetActionType[type]);
+          } else {
+            result.typeParameters.additionalWidgetActionTypes = null;
+          }
         }
         if (isFunction(widgetTypeInstance.actionSources)) {
           result.actionSources = widgetTypeInstance.actionSources();
